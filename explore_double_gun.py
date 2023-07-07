@@ -211,7 +211,6 @@ def accumulate_all(dist, tag):
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
     infiles = op.join(base, "DoublePion_0PU_10En200_3Jul_{}/step3/step3_1[0-9].root".format(dist))
-    #hacc.update({dist: AccumulateHistos(tree, infiles, tag=dist + '_' + tag)})
     return AccumulateHistos(tree, infiles, tag=dist + '_' + tag)
     
 def explore(args):
