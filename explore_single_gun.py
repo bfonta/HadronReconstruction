@@ -44,10 +44,12 @@ class DisplayEvent():
     def _plot_bokeh(self, data, evid):
         assert len(data) == len(evid)
         colors = it.cycle(palette)
-        vpairs = (('z', 'r'), ('z', 'x'), ('z', 'y'), ('x', 'y'),
-                  ('l', 'x'), ('l', 'y'))
-        vlabels = (('z [cm]', 'R [cm]'), ('z [cm]', 'x [cm]'), ('z [cm]', 'y [cm]'), ('x [cm]', 'y [cm]'),
-                   ('layer', 'x [cm]'),  ('layer', 'y [cm]'))
+        vpairs = (('x', 'y'),
+                  ('z', 'R'), ('z', 'x'), ('z', 'y'),
+                  ('L', 'R'), ('L', 'x'), ('L', 'y'))
+        vlabels = (('x [cm]', 'y [cm]'),
+                   ('z [cm]', 'R [cm]'), ('z [cm]', 'x [cm]'), ('z [cm]', 'y [cm]'),
+                   ('Layer', 'R [cm]'), ('Layer', 'x [cm]'),  ('Layer', 'y [cm]'))
         
         lay = []
         for idat, datum in enumerate(data):
@@ -61,8 +63,8 @@ class DisplayEvent():
             source = bm.ColumnDataSource(data=dict(x=ak.flatten(datum['x']).to_numpy(),
                                                    y=ak.flatten(datum['y']).to_numpy(),
                                                    z=ak.flatten(datum['z']).to_numpy(),
-                                                   l=ak.flatten(datum['l']).to_numpy(),
-                                                   r=ak.flatten(datum['r']).to_numpy(),
+                                                   L=ak.flatten(datum['L']).to_numpy(),
+                                                   R=ak.flatten(datum['R']).to_numpy(),
                                                    size=ak.flatten(datum['e']).to_numpy(),
                                                    size_init=ak.flatten(datum['e']).to_numpy(),
                                                    c=np.array(lc_colors)))
@@ -113,7 +115,7 @@ class DisplayEvent():
         lc_l = get_info('layer')
         lc_e = get_info('energy')
         lc_r = [np.sqrt(x**2 + y**2) for x,y in zip(lc_x,lc_y)]
-        return {'x': lc_x, 'y': lc_y, 'z': lc_z, 'r': lc_r, 'l': lc_l, 'e': lc_e}
+        return {'x': lc_x, 'y': lc_y, 'z': lc_z, 'R': lc_r, 'L': lc_l, 'e': lc_e}
                     
     def _select_vars(self):
         v = ["gunparticle_.*", "multiclus_.*", "cluster2d_.*",]
