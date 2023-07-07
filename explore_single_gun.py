@@ -127,8 +127,8 @@ class AccumulateHistos():
     def __init__(self, tree, infiles, tag):
         self.nevents = 0
         self.nbins = 50
-        #self.types = ('hgens', 'hgendiffs', 'hrh')
-        self.types = ('hgen', 'htrackster', 'hntrackster')
+        self.types = ('hgen', 'htrackster', 'hntrackster',
+                      'hfrac1', 'hfrac2', 'hfrac5', 'hfrac10')
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
 
@@ -141,7 +141,6 @@ class AccumulateHistos():
             self._save(tree, infiles)
 
     def _accumulate(self, data):
-        
         self.hgen.fill(en  = ak.flatten(data.gunparticle_energy[:, :, 0]),
                        eta = ak.flatten(data.gunparticle_eta[:, :, 0]),
                        phi = ak.flatten(data.gunparticle_phi[:, :, 0]),
@@ -155,6 +154,13 @@ class AccumulateHistos():
                              )
 
         self.hntrackster.fill(n = ak.count(data.multiclus_energy, axis=1),)
+
+        frac = lambda n : ( ak.sum(ak.sort(data.multiclus_energy)[:,-n:], axis=1) /
+                            ak.sum(data.multiclus_energy, axis=1) )
+        self.hfrac1.fill(frac = frac(1))
+        self.hfrac2.fill(frac = frac(2))
+        self.hfrac5.fill(frac = frac(5))
+        self.hfrac10.fill(frac = frac(10))
 
     def _load(self):
         for t in self.types:
@@ -185,6 +191,12 @@ class AccumulateHistos():
             hist.axis.Regular(nn, 0, nmax,  name="n"),
         ))
 
+        nb = 80
+        setattr(self, 'hfrac1', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")))
+        setattr(self, 'hfrac2', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")))
+        setattr(self, 'hfrac5', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")))
+        setattr(self, 'hfrac10', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")))
+
         allvars = self._select_vars()
         for batch in tqdm(up.iterate(infiles + ":" + tree, 
                                      step_size=1000, library='ak', 
@@ -205,7 +217,8 @@ class AccumulateHistos():
     def _theta(self, eta):
         return 2 * np.arctan(np.exp(-eta))
         
-def plot_bokeh(hists, title, legs, xlabel, ylabel=None, ylog=False, density=False, frac=False):
+def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
+               ylabel=None, ylog=False, density=False, frac=False):
     """Plot using the Bokeh package"""
     if not isinstance(hists, (tuple,list)):
         hists = [hists]
@@ -215,7 +228,7 @@ def plot_bokeh(hists, title, legs, xlabel, ylabel=None, ylog=False, density=Fals
     assert not (density and frac)
     colors = it.cycle(palette)
     
-    p = figure(height=500, width=500, background_fill_color="white", title=title,
+    p = figure(height=400, width=600, background_fill_color="white", title=title,
                y_axis_type='log' if ylog else 'linear')
     for h,l in zip(hists, legs):
         # p.quad(top='top', bottom='bottom', left='left', right='right', source=source,
@@ -226,7 +239,7 @@ def plot_bokeh(hists, title, legs, xlabel, ylabel=None, ylog=False, density=Fals
             source = bm.ColumnDataSource(data=dict(y=h.values()/h.sum(), x=h.axes[0].centers))
         else:
             source = bm.ColumnDataSource(data=dict(y=h.values(), x=h.axes[0].centers))
-        step_opt = dict(y='y', x='x', source=source, mode='center', line_color=next(colors), line_width=3)
+        step_opt = dict(y='y', x='x', source=source, mode='before', line_color=next(colors), line_width=3)
         if len(legs)>1:
             step_opt.update({'legend_label': l})
         p.step(**step_opt)
@@ -235,8 +248,8 @@ def plot_bokeh(hists, title, legs, xlabel, ylabel=None, ylog=False, density=Fals
     p.toolbar.logo = None
     if len(legs)>1:
         p.legend.click_policy='hide'
-        p.legend.location = 'top_right'
-        p.legend.label_text_font_size = '8pt'
+        p.legend.location = legloc
+        p.legend.label_text_font_size = '12pt'
     p.min_border_bottom = 5
     p.xaxis.visible = True
     p.title.align = "left"
@@ -246,6 +259,8 @@ def plot_bokeh(hists, title, legs, xlabel, ylabel=None, ylog=False, density=Fals
     p.y_range.start = 0
 
     p.xaxis.axis_label = xlabel
+    p.xaxis.axis_label_text_font_size = "10pt"
+    p.yaxis.axis_label_text_font_size = "10pt"
     if ylabel is None:
         p.yaxis.axis_label = 'a.u.' if density else 'Counts'
     else:
@@ -296,7 +311,7 @@ def explore_single_gun(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_[0-3][0-9].root")
+    infiles = op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_1[0-9].root")
 
     if args.display:
         de = DisplayEvent(tree, infiles, outpath=outpath, tag="single_" + args.tag)
@@ -339,10 +354,17 @@ def explore_single_gun(args):
             trackster_row.append(p)
 
         ntrackster_row = []
-        opt = dict(legs=[''])
-        p = plot_bokeh(hacc.hntrackster.project("n"),
-                       title=title, xlabel="# Tracksters", **opt)
+        opt = dict(legs=['highest-energy trackster', '2 highest-energy tracksters',
+                         '3 highest-energy tracksters', '10 highest-energy tracksters'],
+                   legloc="top_left")
+        p = plot_bokeh([hacc.hfrac1.project("frac"), hacc.hfrac2.project("frac"),
+                        hacc.hfrac5.project("frac"), hacc.hfrac10.project("frac")], title=title,
+                       xlabel="Fraction of the total trackster energy in an event", **opt)
         ntrackster_row.append(p)
+        opt = dict(legs=[''])
+        # p = plot_bokeh(hacc.hntrackster.project("n"),
+        #                title=title, xlabel="# Tracksters", **opt)
+        # ntrackster_row.append(p)
         p = plot_bokeh(hacc.hntrackster.project("n"),
                        title=title, xlabel="# Tracksters", ylabel="Fraction of events",
                        frac=True, **opt)
@@ -352,7 +374,7 @@ def explore_single_gun(args):
         save(lay)
     
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Data exploration.')
+    parser = argparse.ArgumentParser(description='Data exploration of single pion gun.')
     parser.add_argument('--tag', default='default',
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
     parser.add_argument('--display', action="store_true",
