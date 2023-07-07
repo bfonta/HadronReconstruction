@@ -16,7 +16,7 @@ import glob
 import multiprocessing
 
 from bokeh.palettes import Dark2_5 as palette
-from bokeh.models import ColumnDataSource, Whisker
+from bokeh import models as bm
 from bokeh.plotting import figure, save, output_file
 from bokeh.layouts import layout
 
@@ -39,14 +39,14 @@ class DisplayEvent():
                 event_data.append(self._process_event(batch, iev)) 
             break
 
-        self.plot_bokeh(event_data, [x for x in range(nplots)])
+        self._plot_bokeh(event_data, [x for x in range(nplots)])
 
-    def plot_bokeh(self, data, evid):
+    def _plot_bokeh(self, data, evid):
         assert len(data) == len(evid)
         colors = it.cycle(palette)
-        vpairs = (('z', 'x'), ('z', 'x'), ('x', 'y'),
-                  ('l', 'x'), ('l', 'x'))
-        vlabels = (('z [cm]', 'x [cm]'), ('z [cm]', 'y [cm]'), ('x [cm]', 'y [cm]'),
+        vpairs = (('z', 'r'), ('z', 'x'), ('z', 'y'), ('x', 'y'),
+                  ('l', 'x'), ('l', 'y'))
+        vlabels = (('z [cm]', 'R [cm]'), ('z [cm]', 'x [cm]'), ('z [cm]', 'y [cm]'), ('x [cm]', 'y [cm]'),
                    ('layer', 'x [cm]'),  ('layer', 'y [cm]'))
         
         lay = []
@@ -58,17 +58,19 @@ class DisplayEvent():
                 nc = next(colors)
                 lc_colors.extend([nc for _ in range(lcc)])
      
-            source = ColumnDataSource(data=dict(x=ak.flatten(datum['x']).to_numpy(),
-                                                y=ak.flatten(datum['y']).to_numpy(),
-                                                z=ak.flatten(datum['z']).to_numpy(),
-                                                l=ak.flatten(datum['l']).to_numpy(),
-                                                e=0.7*ak.flatten(datum['e']).to_numpy(),
-                                                c=np.array(lc_colors)))
+            source = bm.ColumnDataSource(data=dict(x=ak.flatten(datum['x']).to_numpy(),
+                                                   y=ak.flatten(datum['y']).to_numpy(),
+                                                   z=ak.flatten(datum['z']).to_numpy(),
+                                                   l=ak.flatten(datum['l']).to_numpy(),
+                                                   r=ak.flatten(datum['r']).to_numpy(),
+                                                   size=ak.flatten(datum['e']).to_numpy(),
+                                                   size_init=ak.flatten(datum['e']).to_numpy(),
+                                                   c=np.array(lc_colors)))
 
             for iv,vp in enumerate(vpairs):
                 p = figure(height=400, width=700, background_fill_color="white",
-                           title="Event {}".format(evid[idat]))
-                p.circle(x=vp[0], y=vp[1], color='c', size='e', source=source)
+                           title="Event {} | {} vs. {}".format(evid[idat], vp[0], vp[1]))
+                p.circle(x=vp[0], y=vp[1], color='c', size='size', source=source)
                             
                 p.output_backend = 'svg'
                 p.toolbar.logo = None
@@ -84,8 +86,19 @@ class DisplayEvent():
                 
                 row.append(p)
 
+            slider = bm.Slider(title='Layer Cluster size (multiple of energy in GeV)', value=1., start=0.1, end=4., step=0.1, width=700)
+            callback = bm.CustomJS(args=dict(source=source), code="""
+            var val = cb_obj.value;
+            var data = source.data;
+            for (var i=0; i<data.size_init.length; i++) {
+            data.size[i] = val * data.size_init[i];
+            }
+            source.change.emit();
+            """)
+            slider.js_on_change('value', callback)
+            lay.append(slider)
             lay.append(row)
-            
+        
         output_file(self.savef('events_display')+'.html')
         lay = layout(lay)
         save(lay)
@@ -99,7 +112,8 @@ class DisplayEvent():
         lc_z = get_info('z')
         lc_l = get_info('layer')
         lc_e = get_info('energy')
-        return {'x': lc_x, 'y': lc_y, 'z': lc_z, 'l': lc_l, 'e': lc_e}
+        lc_r = [np.sqrt(x**2 + y**2) for x,y in zip(lc_x,lc_y)]
+        return {'x': lc_x, 'y': lc_y, 'z': lc_z, 'r': lc_r, 'l': lc_l, 'e': lc_e}
                     
     def _select_vars(self):
         v = ["gunparticle_.*", "multiclus_.*", "cluster2d_.*",]
@@ -205,11 +219,11 @@ def plot_bokeh(hists, title, legs, xlabel, ylabel=None, ylog=False, density=Fals
         # p.quad(top='top', bottom='bottom', left='left', right='right', source=source,
         #        legend_label=l, fill_color=next(colors), line_color="white", alpha=0.5)
         if density:
-            source = ColumnDataSource(data=dict(y=h.density(), x=h.axes[0].centers))
+            source = bm.ColumnDataSource(data=dict(y=h.density(), x=h.axes[0].centers))
         elif frac:
-            source = ColumnDataSource(data=dict(y=h.values()/h.sum(), x=h.axes[0].centers))
+            source = bm.ColumnDataSource(data=dict(y=h.values()/h.sum(), x=h.axes[0].centers))
         else:
-            source = ColumnDataSource(data=dict(y=h.values(), x=h.axes[0].centers))
+            source = bm.ColumnDataSource(data=dict(y=h.values(), x=h.axes[0].centers))
         step_opt = dict(y='y', x='x', source=source, mode='center', line_color=next(colors), line_width=3)
         if len(legs)>1:
             step_opt.update({'legend_label': l})
@@ -235,7 +249,7 @@ def plot_bokeh(hists, title, legs, xlabel, ylabel=None, ylog=False, density=Fals
     else:
         p.yaxis.axis_label = ylabel
 
-    # whisk = Whisker(base="xscan", upper="upper", lower="lower", source=source,
+    # whisk = bm.Whisker(base="xscan", upper="upper", lower="lower", source=source,
     #                 level="annotation", line_width=8, line_color=c)
     # whisk.upper_head.size=8
     # whisk.lower_head.size=8
