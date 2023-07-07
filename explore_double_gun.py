@@ -100,10 +100,10 @@ class AccumulateHistos():
 
         # gen diffs
         setattr(self, 'hgendiffs', hist.Hist(
-            hist.axis.Regular(self.nbins, -20, 20, name="en"),
+            hist.axis.Regular(self.nbins, -50, 50, name="en"),
             hist.axis.Regular(self.nbins, -0.02, 0.02, name="eta"),
             hist.axis.Regular(self.nbins, 0.01, 0.3, name="phi"),
-            hist.axis.Regular(self.nbins, -20, 20, name="pt"),
+            hist.axis.Regular(self.nbins, -35, 35, name="pt"),
         ))
 
         allvars = self._select_vars()
@@ -141,18 +141,16 @@ def plot_bokeh(hists, title, xlabel, legs, ylog=False, density=False):
 
     colors = it.cycle(palette)
     
-    p = figure(height=500, width=500, background_fill_color="#efefef", title=title,
+    p = figure(height=500, width=500, background_fill_color="white", title=title,
                y_axis_type='log' if ylog else 'linear')
     for h,l in zip(hists, legs):
-        # source = ColumnDataSource(data=dict(top=h.values(), bottom=np.zeros_like(h.axes[0].centers)+1e-2,
-        #                                     left=h.axes[0].edges[:-1], right=h.axes[0].edges[1:]))
         # p.quad(top='top', bottom='bottom', left='left', right='right', source=source,
         #        legend_label=l, fill_color=next(colors), line_color="white", alpha=0.5)
         if density:
             source = ColumnDataSource(data=dict(y=h.density(), x=h.axes[0].centers))
         else:
             source = ColumnDataSource(data=dict(y=h.values(), x=h.axes[0].centers))
-        step_opt = dict(y='y', x='x', source=source, mode='center', line_color=next(colors))
+        step_opt = dict(y='y', x='x', source=source, mode='center', line_color=next(colors), line_width=3)
         if len(legs)>1:
             step_opt.update({'legend_label': l})
         p.step(**step_opt)
@@ -161,7 +159,7 @@ def plot_bokeh(hists, title, xlabel, legs, ylog=False, density=False):
     p.toolbar.logo = None
     if len(legs)>1:
         p.legend.click_policy='hide'
-        p.legend.location = 'bottom_right'
+        p.legend.location = 'top_right'
         p.legend.label_text_font_size = '8pt'
     p.min_border_bottom = 5
     p.xaxis.visible = True
@@ -171,7 +169,6 @@ def plot_bokeh(hists, title, xlabel, legs, ylog=False, density=False):
     p.xgrid.grid_line_color = None
     p.y_range.start = 0
 
-    #p.legend.background_fill_color = "#fefefe"
     p.xaxis.axis_label = xlabel
     p.yaxis.axis_label = 'a.u.' if density else 'Counts'
         
@@ -233,14 +230,15 @@ def explore(args):
         hacc[dist] = ret[i]
     
     nevents = sum([hacc[k].nevents for k in hacc.keys()])
-    if nd > 1:
+    if nd == 1:
         title = "Double π ({}), {} events".format(distances[0], nevents)
     else:
         title = "Double π, {} events".format(nevents)
     opt = dict(title=title)
 
     avars = ('en', 'eta', 'phi', 'pt')
-    xlabels = {'en': "Energy [GeV]", 'eta': "η", 'phi': "ϕ", 'pt': 'pT [GeV]'}
+    xlabels      = {'en': "Energy [GeV]", 'eta': "η", 'phi': "ϕ", 'pt': 'pT [GeV]'}
+    xlabels_diff = {'en': "ΔE [GeV]", 'eta': "Δη", 'phi': "Δϕ", 'pt': 'ΔpT [GeV]'}
 
     # matplotlib
     # for avar in avars:
@@ -269,6 +267,20 @@ def explore(args):
                        title=title, xlabel=xlabels[avar], **opt)
         genboth_row.append(p)
 
+    # genfirst_row = []
+    # for avar in avars:
+    #     opt = dict(legs=[''] if nd==1 else distances)
+    #     p = plot_bokeh([hacc[k].gen_histos('first').project(avar) for k in hacc.keys()],
+    #                    title=title, xlabel=xlabels[avar], **opt)
+    #     genfirst_row.append(p)
+
+    # gensecond_row = []
+    # for avar in avars:
+    #     opt = dict(legs=[''] if nd==1 else distances)
+    #     p = plot_bokeh([hacc[k].gen_histos('second').project(avar) for k in hacc.keys()],
+    #                    title=title, xlabel=xlabels[avar], **opt)
+    #     gensecond_row.append(p)
+
     if nd == 1:
         gensplit_row = []
         for avar in avars:
@@ -281,7 +293,7 @@ def explore(args):
     for avar in avars:
         opt = dict(legs=[''] if nd==1 else distances, density=True)
         p = plot_bokeh([hacc[k].hgendiffs.project(avar) for k in hacc.keys()],
-                       title=title, xlabel=xlabels[avar], **opt)
+                       title=title, xlabel=xlabels_diff[avar], **opt)
         gendiff_row.append(p)
 
     if nd > 1:
