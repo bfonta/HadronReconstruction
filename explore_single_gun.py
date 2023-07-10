@@ -54,13 +54,16 @@ class DisplayEvent():
         line_opt_L = dict(x=[26.5, 26.5],   color='gray', line_dash="dashed")
         lay = []
         for idat, datum in enumerate(data):
-            row = []
+            row_hi, row_lo = ([] for _ in range(2))
             lc_counts = [ak.count(x) for x in datum['x']]
-            lc_colors = []
-            for lcc in lc_counts:
+            lc_colors, id_tracksters = ([] for _ in range(2))
+            for ilcc,lcc in enumerate(lc_counts):
+                id_tracksters.extend([ilcc for _ in range(lcc)])
                 nc = next(colors)
                 lc_colors.extend([nc for _ in range(lcc)])
-     
+
+            lc_colors = np.array(lc_colors)
+            id_tracksters = np.array(id_tracksters)
             source = bm.ColumnDataSource(data=dict(x=ak.flatten(datum['x']).to_numpy(),
                                                    y=ak.flatten(datum['y']).to_numpy(),
                                                    z=ak.flatten(datum['z']).to_numpy(),
@@ -68,12 +71,22 @@ class DisplayEvent():
                                                    R=ak.flatten(datum['R']).to_numpy(),
                                                    size=ak.flatten(datum['e']).to_numpy(),
                                                    size_init=ak.flatten(datum['e']).to_numpy(),
-                                                   c=np.array(lc_colors)))
+                                                   c=lc_colors))
+                                         
 
             for iv,vp in enumerate(vpairs):
-                p = figure(height=400, width=700, background_fill_color="white",
+                p = figure(height=350, width=700, background_fill_color="white",
                            title="Event {} | {} vs. {}".format(evid[idat], vp[0], vp[1]))
                 p.circle(x=vp[0], y=vp[1], color='c', size='size', source=source)
+                p_lo = figure(height=200, width=700, background_fill_color="white", title="", x_range=p.x_range)
+                p_lo.circle(x=vp[0], y='size_init', color='c', size=3, source=source)
+                for itrk in np.unique(id_tracksters):
+                    ax = ak.flatten(datum['x'])[id_tracksters == itrk]
+                    ay = ak.flatten(datum['e'])[id_tracksters == itrk]
+                    ac = lc_colors[id_tracksters == itrk]
+                    #p_lo.line(x=ax.to_numpy(), y=ay.to_numpy(), line_color=ac[0], line_width=2)
+                    break
+                
                 if vp[0] in ('z', 'L'):
                     xmin, xmax = ak.min(datum['x']), ak.max(datum['x'])
                     ymin, ymax = ak.min(datum['y']), ak.max(datum['y'])
@@ -92,20 +105,25 @@ class DisplayEvent():
                             p.line(y=[ymin, ymax], **line_opt_L)
                         elif vp[1] == 'R':
                             p.line(y=[rmin, rmax], **line_opt_L)
-                    
-                p.output_backend = 'svg'
-                p.toolbar.logo = None
-                p.min_border_bottom = 5
-                p.title.align = "left"
-                p.title.text_font_size = "15px"
-            
-                p.xgrid.grid_line_color = None
-                p.ygrid.grid_line_color = None
 
-                p.xaxis.axis_label = vlabels[iv][0]
+                for thisp in (p, p_lo):
+                    thisp.output_backend = 'svg'
+                    thisp.toolbar.logo = None
+                    thisp.title.align = "left"
+                    thisp.title.text_font_size = "15px"
+                    thisp.xgrid.grid_line_color = None
+                    thisp.ygrid.grid_line_color = None
+                    thisp.xaxis.axis_label = vlabels[iv][0]
+                    thisp.outline_line_color = None
+
                 p.yaxis.axis_label = vlabels[iv][1]
+                p.min_border_bottom = 0
+                p_lo.min_border_top = 0
+                # p.xaxis.major_label_text_font_size = '0pt'
+                p_lo.yaxis.axis_label = "Energy [GeV]"
                 
-                row.append(p)
+                row_hi.append(p)
+                row_lo.append(p_lo)
 
             slider = bm.Slider(title='Layer Cluster size (multiple of energy in GeV)', value=1., start=0.1, end=4., step=0.1, width=700)
             callback = bm.CustomJS(args=dict(source=source), code="""
@@ -118,7 +136,8 @@ class DisplayEvent():
             """)
             slider.js_on_change('value', callback)
             lay.append(slider)
-            lay.append(row)
+            lay.append(row_hi)
+            lay.append(row_lo)
         
         output_file(self.savef('events_display')+'.html')
         lay = layout(lay)
