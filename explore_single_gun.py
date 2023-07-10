@@ -17,8 +17,9 @@ import warnings
 
 from bokeh import models as bm
 from bokeh.layouts import layout
-from bokeh.palettes import Dark2_5 as palette
+from bokeh.palettes import Dark2_5 as palette, OrRd9 as palette_2d
 from bokeh.plotting import figure, save, output_file
+from bokeh.transform import linear_cmap
 
 import matplotlib; import matplotlib.pyplot as plt
 import mplhep as hep
@@ -145,7 +146,7 @@ class AccumulateHistos():
     def __init__(self, tree, infiles, tag):
         self.nevents = 0
         self.nbins = 50
-        self.types = ('hgen', 'htrackster', 'hntrackster',
+        self.types = ('hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
                       'hfrac1', 'hfrac2', 'hfrac5', 'hfrac10')
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
@@ -173,6 +174,13 @@ class AccumulateHistos():
 
         self.hntrackster.fill(n = ak.count(data.multiclus_energy, axis=1),)
 
+        self.hntrackster_2d.fill(n = ak.count(data.multiclus_energy, axis=1),
+                                 en = ak.ravel(data.gunparticle_energy),
+                                 eta = ak.ravel(data.gunparticle_eta),
+                                 phi = ak.ravel(data.gunparticle_phi),
+                                 pt = ak.ravel(data.gunparticle_pt),
+                                 )
+
         frac = lambda n : ( ak.sum(ak.sort(data.multiclus_energy)[:,-n:], axis=1) /
                             ak.sum(data.multiclus_energy, axis=1) )
         self.hfrac1.fill(frac = frac(1))
@@ -188,12 +196,14 @@ class AccumulateHistos():
         self.nevents = int(sum(self.hgen.project('en').counts()))
 
     def _save(self, tree, infiles):
+        ranges = {'en': (10, 1050.), 'eta': (1.55, 2.85), 'phi': (-3.2, 3.2), 'pt': (0, 390)}
+        
         # gen variables
         setattr(self, 'hgen', hist.Hist(
-            hist.axis.Regular(self.nbins, 0,    1050, name="en"),
-            hist.axis.Regular(self.nbins, 1.5,  2.9, name="eta"),
-            hist.axis.Regular(self.nbins, -3.2, 3.2, name="phi"),
-            hist.axis.Regular(self.nbins, 0,    600, name="pt"),
+            hist.axis.Regular(self.nbins, ranges['en'][0],  ranges['en'][1],  name="en"),
+            hist.axis.Regular(self.nbins, ranges['eta'][0], ranges['eta'][1], name="eta"),
+            hist.axis.Regular(self.nbins, ranges['phi'][0], ranges['phi'][1], name="phi"),
+            hist.axis.Regular(self.nbins, ranges['pt'][0],  ranges['pt'][1],  name="pt"),
         ))
 
         setattr(self, 'htrackster', hist.Hist(
@@ -207,6 +217,15 @@ class AccumulateHistos():
         nn = nmax+1
         setattr(self, 'hntrackster', hist.Hist(
             hist.axis.Regular(nn, 0, nmax,  name="n"),
+        ))
+
+        nn2 = 10
+        setattr(self, 'hntrackster_2d', hist.Hist(
+            hist.axis.Regular(nn,  0, nmax,  name="n"),
+            hist.axis.Regular(nn2, ranges['en'][0],  ranges['en'][1],  name="en"),
+            hist.axis.Regular(nn2, ranges['eta'][0], ranges['eta'][1], name="eta"),
+            hist.axis.Regular(nn2, ranges['phi'][0], ranges['phi'][1], name="phi"),
+            hist.axis.Regular(nn2, ranges['pt'][0],  ranges['pt'][1],  name="pt"),
         ))
 
         nb = 80
@@ -236,7 +255,8 @@ class AccumulateHistos():
         return 2 * np.arctan(np.exp(-eta))
         
 def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
-               ylabel=None, ylog=False, density=False, frac=False):
+               ylabel=None, ylog=False, density=False, frac=False,
+               mode='step', xerr=False, yerr=False):
     """Plot using the Bokeh package"""
     if not isinstance(hists, (tuple,list)):
         hists = [hists]
@@ -247,34 +267,78 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
     colors = it.cycle(palette)
     
     p = figure(height=400, width=600, background_fill_color="white", title=title,
-               y_axis_type='log' if ylog else 'linear')
+               y_axis_type='log' if ylog else 'linear',
+               tools="save,box_zoom,wheel_zoom,reset,undo,redo")
     for h,l in zip(hists, legs):
-        # p.quad(top='top', bottom='bottom', left='left', right='right', source=source,
-        #        legend_label=l, fill_color=next(colors), line_color="white", alpha=0.5)
         if density:
             source = bm.ColumnDataSource(data=dict(y=h.density(), x=h.axes[0].centers))
         elif frac:
             source = bm.ColumnDataSource(data=dict(y=h.values()/h.sum(), x=h.axes[0].centers))
-        else:
-            source = bm.ColumnDataSource(data=dict(y=h.values(), x=h.axes[0].centers))
-        step_opt = dict(y='y', x='x', source=source, mode='before', line_color=next(colors), line_width=3)
+        elif mode != '2d':
+            source = bm.ColumnDataSource(data=dict(y=h.values(), x=h.axes[0].centers, xup=h.values()/2, xdown=h.values()/4))
+
+        if mode == '2d':
+            xbins  = np.array([x for x in h.axes[0].centers for _ in range(len(h.axes[1].centers))])
+            wbins  = np.array([x for x in (h.axes[0].edges[1:] - h.axes[0].edges[:-1]) for _ in range(len(h.axes[1].centers))])
+            xtextbins  = np.array([x-w/3 for x,w in zip(h.axes[0].centers,wbins) for _ in range(len(h.axes[1].centers))])
+            ybins  = ak.concatenate([h.axes[1].centers for _ in range(len(h.axes[0].centers))]).to_numpy()
+            hbins  = ak.concatenate([(h.axes[1].edges[1:] - h.axes[1].edges[:-1]) for _ in range(len(h.axes[1].centers))]).to_numpy()
+            vals   = np.nan_to_num(np.round(ak.ravel(h.values()).to_numpy(),2), nan=0.)
+            cmap   = linear_cmap("vals", palette=palette_2d[::-1], low=min(vals), high=max(vals))
+            source = bm.ColumnDataSource(data=dict(xbins=xbins, ybins=ybins, height=hbins, width=wbins, vals=vals, xtext=xtextbins))
+
+        glyph_opt = dict(y='y', x='x', source=source)
         if len(legs)>1:
-            step_opt.update({'legend_label': l})
-        p.step(**step_opt)
-        
+            glyph_opt.update({'legend_label': l})
+
+        if mode == 'step':
+            p.step(**glyph_opt, mode='before', line_color=next(colors), line_width=3)
+
+        elif mode == 'point':
+            thisc = next(colors)
+            p.circle(**glyph_opt, color=thisc, size=6)
+
+            if xerr:
+                x_err_x = []
+                x_err_y = []
+                for px, py, err in zip(h.axes[0].centers, h.values(), (h.axes[0].edges[1:] - h.axes[0].edges[:-1])/2):
+                    x_err_x.append((px - err, px + err))
+                    x_err_y.append((py, py))
+                p.multi_line(x_err_x, x_err_y, color=thisc)
+
+            if yerr:
+                y_err_x = []
+                y_err_y = []
+                for px, py, err in zip(h.axes[0].centers, h.values(), np.sqrt(h.variances())/2):
+                    y_err_x.append((px, px))
+                    y_err_y.append((py - err, py + err))
+                p.multi_line(y_err_x, y_err_y, color=thisc)
+
+        elif mode == '2d':
+            r = p.rect(x='xbins', y='ybins', width='width', height='height', source=source,
+                       color=cmap, line_width=2, line_color='black')
+            color_bar = r.construct_color_bar(padding=0, ticker=p.yaxis.ticker, formatter=p.yaxis.formatter)
+            color_bar.title="Average number of tracksters"
+            color_bar.title_text_align="center"
+            color_bar.title_text_font_size = '10pt'
+            p.add_layout(color_bar, 'right')
+
+            text = bm.Text(x="xtext", y="ybins", text="vals", angle=0.0, text_color="black", text_font_size="9pt")
+            p.add_glyph(source, text)
+
     p.output_backend = 'svg'
     p.toolbar.logo = None
     if len(legs)>1:
         p.legend.click_policy='hide'
         p.legend.location = legloc
         p.legend.label_text_font_size = '12pt'
-    p.min_border_bottom = 5
+    p.min_border_bottom = 10
     p.xaxis.visible = True
     p.title.align = "left"
     p.title.text_font_size = "15px"
     
     p.xgrid.grid_line_color = None
-    p.y_range.start = 0
+    #p.y_range.start = 0
 
     p.xaxis.axis_label = xlabel
     p.xaxis.axis_label_text_font_size = "10pt"
@@ -329,7 +393,7 @@ def explore_single_gun(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_1.root")
+    infiles = op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_[0-9][0-9].root")
 
     if args.display:
         de = DisplayEvent(tree, infiles, outpath=outpath, tag="single_" + args.tag)
@@ -340,7 +404,7 @@ def explore_single_gun(args):
         opt = dict(title=title)
 
         avars = ('en', 'eta', 'phi', 'pt')
-        xlabels      = {'en': "Energy [GeV]", 'eta': "η", 'phi': "ϕ", 'pt': 'pT [GeV]'}
+        xlabels      = {'en': "Energy [GeV]", 'eta': "|η|", 'phi': "ϕ", 'pt': 'pT [GeV]'}
         xlabels_diff = {'en': "ΔE [GeV]", 'eta': "Δη", 'phi': "Δϕ", 'pt': 'ΔpT [GeV]'}
 
         # matplotlib
@@ -388,7 +452,29 @@ def explore_single_gun(args):
                        frac=True, **opt)
         ntrackster_row.append(p)
 
-        lay = layout([gen_row, ntrackster_row, trackster_row])
+        ntrackster_2d_split_row = []
+        opt = dict(legs=[''])
+        for avar in avars:
+            p = plot_bokeh(hacc.hntrackster_2d.project(avar, "n").profile("n"),
+                           title=title, ylabel="# Tracksters", xlabel=xlabels[avar],
+                           mode='point', xerr=True, yerr=True, **opt)
+
+            ntrackster_2d_split_row.append(p)
+
+        ntrackster_2d_row = []
+        opt = dict(legs=[''])
+        for ivar in ("en", "pt"):
+            for jvar in ("eta", "phi"):
+                p = plot_bokeh(hacc.hntrackster_2d.project(jvar, ivar, "n").profile("n"),
+                           title=title, xlabel=xlabels[jvar], ylabel=xlabels[ivar],
+                           mode='2d', **opt)
+                ntrackster_2d_row.append(p)
+        p = plot_bokeh(hacc.hntrackster_2d.project("eta", "phi", "n").profile("n"),
+                       title=title, xlabel=xlabels["eta"], ylabel=xlabels["phi"],
+                       mode='2d', **opt)
+        ntrackster_2d_row.append(p)
+
+        lay = layout([gen_row, trackster_row, ntrackster_row, ntrackster_2d_split_row, ntrackster_2d_row])
         save(lay)
     
 if __name__ == "__main__":
