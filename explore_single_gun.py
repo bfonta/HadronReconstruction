@@ -2,26 +2,25 @@
 
 _all_ = [ 'explore_single_gun' ]
 
-import os
-from os import path as op
+from tqdm import tqdm
 import argparse
-import numpy as np
-import uproot as up
 import awkward as ak
+import glob
 import hist
 import itertools as it
-from tqdm import tqdm
-import pickle
-import glob
 import multiprocessing
+import numpy as np
+import os; from os import path as op
+import pickle
+import uproot as up
+import warnings
 
-from bokeh.palettes import Dark2_5 as palette
 from bokeh import models as bm
-from bokeh.plotting import figure, save, output_file
 from bokeh.layouts import layout
+from bokeh.palettes import Dark2_5 as palette
+from bokeh.plotting import figure, save, output_file
 
-import matplotlib
-import matplotlib.pyplot as plt
+import matplotlib; import matplotlib.pyplot as plt
 import mplhep as hep
 plt.style.use(hep.style.ROOT)
 
@@ -36,7 +35,7 @@ class DisplayEvent():
                                      step_size=1000, library='ak', 
                                      filter_name="/" + "|".join(allvars) + "/"), total=len(glob.glob(infiles))):
             for iev in range(nplots):
-                event_data.append(self._process_event(batch, iev)) 
+                event_data.append(self._process_event(batch, iev))
             break
 
         self._plot_bokeh(event_data, [x for x in range(nplots)])
@@ -50,7 +49,8 @@ class DisplayEvent():
         vlabels = (('x [cm]', 'y [cm]'),
                    ('z [cm]', 'R [cm]'), ('z [cm]', 'x [cm]'), ('z [cm]', 'y [cm]'),
                    ('Layer', 'R [cm]'), ('Layer', 'x [cm]'),  ('Layer', 'y [cm]'))
-        
+        line_opt_z = dict(x=[364.5, 364.5], color='gray', line_dash="dashed")
+        line_opt_L = dict(x=[26.5, 26.5],   color='gray', line_dash="dashed")
         lay = []
         for idat, datum in enumerate(data):
             row = []
@@ -73,7 +73,25 @@ class DisplayEvent():
                 p = figure(height=400, width=700, background_fill_color="white",
                            title="Event {} | {} vs. {}".format(evid[idat], vp[0], vp[1]))
                 p.circle(x=vp[0], y=vp[1], color='c', size='size', source=source)
-                            
+                if vp[0] in ('z', 'L'):
+                    xmin, xmax = ak.min(datum['x']), ak.max(datum['x'])
+                    ymin, ymax = ak.min(datum['y']), ak.max(datum['y'])
+                    rmin, rmax = ak.min(datum['R']), ak.max(datum['R'])
+                    if vp[0] == 'z':
+                        if vp[1] == 'x':
+                            p.line(y=[xmin, xmax], **line_opt_z)
+                        if vp[1] == 'y':
+                            p.line(y=[ymin, ymax], **line_opt_z)
+                        elif vp[1] == 'R':
+                            p.line(y=[rmin, rmax], **line_opt_z)
+                    elif vp[0] == 'L':
+                        if vp[1] == 'x':
+                            p.line(y=[xmin, xmax], **line_opt_L)
+                        elif vp[1] == 'y':
+                            p.line(y=[ymin, ymax], **line_opt_L)
+                        elif vp[1] == 'R':
+                            p.line(y=[rmin, rmax], **line_opt_L)
+                    
                 p.output_backend = 'svg'
                 p.toolbar.logo = None
                 p.min_border_bottom = 5
@@ -311,7 +329,7 @@ def explore_single_gun(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_1[0-9].root")
+    infiles = op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_1.root")
 
     if args.display:
         de = DisplayEvent(tree, infiles, outpath=outpath, tag="single_" + args.tag)
@@ -380,5 +398,7 @@ if __name__ == "__main__":
     parser.add_argument('--display', action="store_true",
                         help='Whether to display an event or to plot histograms.')
     FLAGS = parser.parse_args()
-
+    if FLAGS.display and FLAGS.tag != parser.get_default('tag'):
+        warnings.warn('Specifying a tag has no effect when using `--display`.')
+    
     explore_single_gun(FLAGS)

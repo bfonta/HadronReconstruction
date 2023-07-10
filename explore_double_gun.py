@@ -1,6 +1,6 @@
 # coding: utf-8
 
-_all_ = [ 'explore' ]
+_all_ = [ 'explore_double_gun' ]
 
 import os
 from os import path as op
@@ -213,7 +213,7 @@ def accumulate_all(dist, tag):
     infiles = op.join(base, "DoublePion_0PU_10En200_3Jul_{}/step3/step3_1[0-9].root".format(dist))
     return AccumulateHistos(tree, infiles, tag=dist + '_' + tag)
     
-def explore(args):
+def explore_double_gun(args):
     """Data exploration."""
     distances = tuple(x + "cm" for x in args.dist)
     nd = len(distances)
@@ -309,4 +309,4 @@ if __name__ == "__main__":
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
     FLAGS = parser.parse_args()
 
-    explore(FLAGS)
+    explore_double_gun(FLAGS)
