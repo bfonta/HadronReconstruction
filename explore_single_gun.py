@@ -1,4 +1,4 @@
-# coding: utf-8
+# Coding: utf-8
 
 _all_ = [ 'explore_single_gun' ]
 
@@ -27,6 +27,7 @@ plt.style.use(hep.style.ROOT)
 
 class DisplayEvent():
     def __init__(self, tree, infiles, outpath, tag):
+        self.tag = tag
         self.savef = lambda x : op.join(outpath, x)
 
         allvars = self._select_vars()
@@ -139,7 +140,7 @@ class DisplayEvent():
             lay.append(row_hi)
             lay.append(row_lo)
         
-        output_file(self.savef('events_display')+'.html')
+        output_file(self.savef('events_display_' + self.tag)+'.html')
         lay = layout(lay)
         save(lay)
 
@@ -412,89 +413,85 @@ def explore_single_gun(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_[0-9][0-9].root")
+    infiles = (op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_*.root"),
+               op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root"))
+    tags = ('clue3d',) #('clue3d', 'linking')
+    for inf,tag in zip(infiles,tags):
+        if args.display:
+            de = DisplayEvent(tree, inf, outpath=outpath, tag="single_" + tag)
 
-    if args.display:
-        de = DisplayEvent(tree, infiles, outpath=outpath, tag="single_" + args.tag)
+        else:
+            hacc = AccumulateHistos(tree, inf, tag="single_"+tag)    
+            title = "Single π, {} events".format(hacc.nevents)
+            opt = dict(title=title)
 
-    else:
-        hacc = AccumulateHistos(tree, infiles, tag="single_" + args.tag)    
-        title = "Single π, {} events".format(hacc.nevents)
-        opt = dict(title=title)
+            avars = ('en', 'eta', 'phi', 'pt')
+            xlabels      = {'en': "Energy [GeV]", 'eta': "|η|", 'phi': "ϕ", 'pt': 'pT [GeV]'}
+            xlabels_diff = {'en': "ΔE [GeV]", 'eta': "Δη", 'phi': "Δϕ", 'pt': 'ΔpT [GeV]'}
 
-        avars = ('en', 'eta', 'phi', 'pt')
-        xlabels      = {'en': "Energy [GeV]", 'eta': "|η|", 'phi': "ϕ", 'pt': 'pT [GeV]'}
-        xlabels_diff = {'en': "ΔE [GeV]", 'eta': "Δη", 'phi': "Δϕ", 'pt': 'ΔpT [GeV]'}
-
-        # matplotlib
-        # for avar in avars:
-        #     opt = dict(legs=[''] if nd==1 else distances, title=title)
-        #     plot_hist_mpl(hacc.hgen.project(avar),
-        #                   xlabel=xlabels[avar], out=savef("single_"+avar+"_both"), **opt)
+            # matplotlib
+            # for avar in avars:
+            #     opt = dict(legs=[''] if nd==1 else distances, title=title)
+            #     plot_hist_mpl(hacc.hgen.project(avar),
+            #                   xlabel=xlabels[avar], out=savef("single_"+avar+"_both"), **opt)
         
-        # for avar in avars:
-        #     opt = dict(legs=[''] if nd==1 else distances, title=title)
-        #     plot_hist_mpl([hacc.hgendiffs.project(avar),
-        #                   xlabel='Arc-dist [cm]' if avar=='phi' else xlabels[avar],
-        #                   out=savef("single_"+avar+"_diff"), **opt)
+            # bokeh
+            output_file(savef('single_bokeh_'+tag)+'.html')
+            gen_row = []
+            for avar in avars:
+                opt = dict(legs=[''])
+                p = plot_bokeh(hacc.hgen.project(avar),
+                               title=title, xlabel=xlabels[avar], **opt)
+                gen_row.append(p)
 
-        # bokeh
-        output_file(savef('single_bokeh')+'.html')
-        gen_row = []
-        for avar in avars:
+            trackster_row = []
+            for avar in avars:
+                opt = dict(legs=[''], ylog=True if avar=="pt" or avar=="en" else False)
+                p = plot_bokeh(hacc.htrackster.project(avar),
+                               title=title, xlabel=xlabels[avar], **opt)
+                trackster_row.append(p)
+
+            ntrackster_row = []
+            opt = dict(legs=['highest-energy trackster', '2 highest-energy tracksters',
+                             '3 highest-energy tracksters', '10 highest-energy tracksters'],
+                       legloc="top_left")
+            p = plot_bokeh([hacc.hfrac1.project("frac"), hacc.hfrac2.project("frac"),
+                            hacc.hfrac5.project("frac"), hacc.hfrac10.project("frac")], title=title,
+                           xlabel="Fraction of the total trackster energy in an event", **opt)
+            ntrackster_row.append(p)
             opt = dict(legs=[''])
-            p = plot_bokeh(hacc.hgen.project(avar),
-                           title=title, xlabel=xlabels[avar], **opt)
-            gen_row.append(p)
+            # p = plot_bokeh(hacc.hntrackster.project("n"),
+            #                title=title, xlabel="# Tracksters", **opt)
+            # ntrackster_row.append(p)
+            p = plot_bokeh(hacc.hntrackster.project("n"),
+                           title=title, xlabel="# Tracksters", ylabel="Fraction of events",
+                           frac=True, **opt)
+            ntrackster_row.append(p)
 
-        trackster_row = []
-        for avar in avars:
-            opt = dict(legs=[''], ylog=True if avar=="pt" or avar=="en" else False)
-            p = plot_bokeh(hacc.htrackster.project(avar),
-                           title=title, xlabel=xlabels[avar], **opt)
-            trackster_row.append(p)
+            ntrackster_2d_split_row = []
+            opt = dict(legs=[''])
+            for avar in avars:
+                p = plot_bokeh(hacc.hntrackster_2d.project(avar, "n").profile("n"),
+                               title=title, ylabel="# Tracksters", xlabel=xlabels[avar],
+                               mode='point', xerr=True, yerr=True, **opt)
 
-        ntrackster_row = []
-        opt = dict(legs=['highest-energy trackster', '2 highest-energy tracksters',
-                         '3 highest-energy tracksters', '10 highest-energy tracksters'],
-                   legloc="top_left")
-        p = plot_bokeh([hacc.hfrac1.project("frac"), hacc.hfrac2.project("frac"),
-                        hacc.hfrac5.project("frac"), hacc.hfrac10.project("frac")], title=title,
-                       xlabel="Fraction of the total trackster energy in an event", **opt)
-        ntrackster_row.append(p)
-        opt = dict(legs=[''])
-        # p = plot_bokeh(hacc.hntrackster.project("n"),
-        #                title=title, xlabel="# Tracksters", **opt)
-        # ntrackster_row.append(p)
-        p = plot_bokeh(hacc.hntrackster.project("n"),
-                       title=title, xlabel="# Tracksters", ylabel="Fraction of events",
-                       frac=True, **opt)
-        ntrackster_row.append(p)
+                ntrackster_2d_split_row.append(p)
 
-        ntrackster_2d_split_row = []
-        opt = dict(legs=[''])
-        for avar in avars:
-            p = plot_bokeh(hacc.hntrackster_2d.project(avar, "n").profile("n"),
-                           title=title, ylabel="# Tracksters", xlabel=xlabels[avar],
-                           mode='point', xerr=True, yerr=True, **opt)
-
-            ntrackster_2d_split_row.append(p)
-
-        ntrackster_2d_row = []
-        opt = dict(legs=[''])
-        for ivar in ("en", "pt"):
-            for jvar in ("eta", "phi"):
-                p = plot_bokeh(hacc.hntrackster_2d.project(jvar, ivar, "n").profile("n"),
-                           title=title, xlabel=xlabels[jvar], ylabel=xlabels[ivar],
+            ntrackster_2d_row = []
+            opt = dict(legs=[''])
+            for ivar in ("en", "pt"):
+                for jvar in ("eta", "phi"):
+                    p = plot_bokeh(hacc.hntrackster_2d.project(jvar, ivar, "n").profile("n"),
+                                   title=title, xlabel=xlabels[jvar], ylabel=xlabels[ivar],
+                                   mode='2d', **opt)
+                    ntrackster_2d_row.append(p)
+            p = plot_bokeh(hacc.hntrackster_2d.project("eta", "phi", "n").profile("n"),
+                           title=title, xlabel=xlabels["eta"], ylabel=xlabels["phi"],
                            mode='2d', **opt)
-                ntrackster_2d_row.append(p)
-        p = plot_bokeh(hacc.hntrackster_2d.project("eta", "phi", "n").profile("n"),
-                       title=title, xlabel=xlabels["eta"], ylabel=xlabels["phi"],
-                       mode='2d', **opt)
-        ntrackster_2d_row.append(p)
+            ntrackster_2d_row.append(p)
 
-        lay = layout([gen_row, trackster_row, ntrackster_row, ntrackster_2d_split_row, ntrackster_2d_row])
-        save(lay)
+            lay = layout([gen_row, trackster_row, ntrackster_row, ntrackster_2d_split_row, ntrackster_2d_row])
+            save(lay)
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Data exploration of single pion gun.')
