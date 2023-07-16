@@ -34,7 +34,7 @@ class DisplayEvent():
         event_data = []
         nplots = 20
         for batch in tqdm(up.iterate(infiles + ":" + tree, 
-                                     step_size=1000, library='ak', 
+                                     step_size=10000, library='ak',
                                      filter_name="/" + "|".join(allvars) + "/"), total=len(glob.glob(infiles))):
             for iev in range(nplots):
                 event_data.append(self._process_event(batch, iev))
@@ -167,7 +167,8 @@ class AccumulateHistos():
         self.nevents = 0
         self.nbins = 50
         self.types = ('hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
-                      'hfrac1', 'hfrac2', 'hfrac5', 'hfrac10')
+                      'hfrac1', 'hfrac2', 'hfrac5', 'hfrac10',
+                      'hfracsel1', 'hfracsel2', 'hfracsel5', 'hfracsel10',)
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
 
@@ -201,12 +202,26 @@ class AccumulateHistos():
                                  pt = ak.ravel(data.gunparticle_pt),
                                  )
 
-        frac = lambda n : ( ak.sum(ak.sort(data.multiclus_energy)[:,-n:], axis=1) /
-                            ak.sum(data.multiclus_energy, axis=1) )
+        def frac(n):
+            """Select n highest-energy tracksters for each event."""
+            return (ak.sum(ak.sort(data.multiclus_energy)[:,-n:], axis=1) /
+                    ak.sum(data.multiclus_energy, axis=1))
+            
         self.hfrac1.fill(frac = frac(1))
         self.hfrac2.fill(frac = frac(2))
         self.hfrac5.fill(frac = frac(5))
         self.hfrac10.fill(frac = frac(10))
+
+        def frac_sel(n):
+            """Events with >= n tracksters."""
+            sel = ak.count(data.multiclus_energy, axis=1) > n
+            en_top_n = ak.sort(data.multiclus_energy)[:,-n:]
+            return ak.sum(en_top_n[sel], axis=1) / ak.sum(data.multiclus_energy[sel], axis=1)
+
+        self.hfracsel1.fill(fracsel = frac_sel(1))
+        self.hfracsel2.fill(fracsel = frac_sel(2))
+        self.hfracsel5.fill(fracsel = frac_sel(5))
+        self.hfracsel10.fill(fracsel = frac_sel(10))
 
     def _load(self):
         for t in self.types:
@@ -216,7 +231,7 @@ class AccumulateHistos():
         self.nevents = int(sum(self.hgen.project('en').counts()))
 
     def _save(self, tree, infiles):
-        ranges = {'en': (10, 1050.), 'eta': (1.55, 2.85), 'phi': (-3.2, 3.2), 'pt': (0, 390)}
+        ranges = {'en': (5., 205.), 'eta': (1.55, 2.85), 'phi': (-3.25, 3.25), 'pt': (0, 75)}
         
         # gen variables
         setattr(self, 'hgen', hist.Hist(
@@ -233,7 +248,7 @@ class AccumulateHistos():
             hist.axis.Regular(self.nbins, 0,    18,  name="pt"),
         ))
 
-        nmax = 61
+        nmax = 25
         nn = nmax+1
         setattr(self, 'hntrackster', hist.Hist(
             hist.axis.Regular(nn, 0, nmax,  name="n"),
@@ -253,10 +268,14 @@ class AccumulateHistos():
         setattr(self, 'hfrac2', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")))
         setattr(self, 'hfrac5', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")))
         setattr(self, 'hfrac10', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")))
+        setattr(self, 'hfracsel1', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="fracsel")))
+        setattr(self, 'hfracsel2', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="fracsel")))
+        setattr(self, 'hfracsel5', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="fracsel")))
+        setattr(self, 'hfracsel10', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="fracsel")))
 
         allvars = self._select_vars()
         for batch in tqdm(up.iterate(infiles + ":" + tree, 
-                                     step_size=1000, library='ak', 
+                                     step_size=10000, library='ak',
                                      filter_name="/" + "|".join(allvars) + "/"), total=len(glob.glob(infiles))):
             self.nevents += int(ak.count(batch.event))
             self._accumulate(batch)
@@ -278,6 +297,9 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
                ylabel=None, ylog=False, density=False, frac=False,
                mode='step', xerr=False, yerr=False):
     """Plot using the Bokeh package"""
+    if ylog is True and density is True:
+        raise RuntimeError('Currently ylog and density cannot be used simultaneously.')
+    
     if not isinstance(hists, (tuple,list)):
         hists = [hists]
     if not isinstance(legs, (tuple,list)):
@@ -285,18 +307,11 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
     assert len(hists) == len(legs)
     assert not (density and frac)
     colors = it.cycle(palette)
-    
+
     p = figure(height=400, width=600, background_fill_color="white", title=title,
                y_axis_type='log' if ylog else 'linear',
                tools="save,box_zoom,wheel_zoom,reset,undo,redo")
     for h,l in zip(hists, legs):
-        if density:
-            source = bm.ColumnDataSource(data=dict(y=h.density(), x=h.axes[0].centers))
-        elif frac:
-            source = bm.ColumnDataSource(data=dict(y=h.values()/h.sum(), x=h.axes[0].centers))
-        elif mode != '2d':
-            source = bm.ColumnDataSource(data=dict(y=h.values(), x=h.axes[0].centers, xup=h.values()/2, xdown=h.values()/4))
-
         if mode == '2d':
             xbins  = np.array([x for x in h.axes[0].centers for _ in range(len(h.axes[1].centers))])
             wbins  = np.array([x for x in (h.axes[0].edges[1:] - h.axes[0].edges[:-1]) for _ in range(len(h.axes[1].centers))])
@@ -307,6 +322,21 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
             cmap   = linear_cmap("vals", palette=palette_2d[::-1], low=min(vals), high=max(vals))
             source = bm.ColumnDataSource(data=dict(xbins=xbins, ybins=ybins, height=hbins, width=wbins, vals=vals, xtext=xtextbins))
 
+        else:
+            hcenters = h.axes[0].centers
+            if density:
+                hvals = h.density()
+                herrup, herrdown = np.zeros_like(hcenters), np.zeros_like(hcenters)
+            elif frac:
+                hvals = h.values()/h.sum()
+                herrup, herrdown = np.zeros_like(hcenters), np.zeros_like(hcenters)
+            else:
+                hvals = h.values()
+                herrup, herrdown = h.variances()/2, h.variances()/2
+            if ylog:
+                hvals[hvals==0.] = 0.5 # avoid infinities
+            source = bm.ColumnDataSource(data=dict(y=hvals, x=hcenters, xup=herrup, xdown=herrdown))
+            
         glyph_opt = dict(y='y', x='x', source=source)
         if len(legs)>1:
             glyph_opt.update({'legend_label': l})
@@ -390,6 +420,7 @@ def plot_hist_mpl(hists, out, title, xlabel, legs, ylabel=None, ylog=False, dens
     else:
         plt.ylabel(ylabel)
     if ylog:
+        hists = [[h if h>0. else 0.1] for hist in hists for h in hist]
         ax.set_yscale('log')
     
     for i, (h,leg) in enumerate(zip(hists,legs)):
@@ -413,8 +444,9 @@ def explore_single_gun(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = (op.join(base, "SinglePion_0PU_10En200_30Jun/step3/step3_*.root"),
-               op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root"))
+    infiles = (op.join(base, "SinglePion_0PU_10En200_11Jul/step3/step3_1.root"),
+               #op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root")
+               )
     tags = ('clue3d',) #('clue3d', 'linking')
     for inf,tag in zip(infiles,tags):
         if args.display:
@@ -453,11 +485,17 @@ def explore_single_gun(args):
 
             ntrackster_row = []
             opt = dict(legs=['highest-energy trackster', '2 highest-energy tracksters',
-                             '3 highest-energy tracksters', '10 highest-energy tracksters'],
+                             '5 highest-energy tracksters', '10 highest-energy tracksters'],
                        legloc="top_left")
             p = plot_bokeh([hacc.hfrac1.project("frac"), hacc.hfrac2.project("frac"),
-                            hacc.hfrac5.project("frac"), hacc.hfrac10.project("frac")], title=title,
+                            hacc.hfrac5.project("frac"), hacc.hfrac10.project("frac")],
+                           title=title, ylog=True,
                            xlabel="Fraction of the total trackster energy in an event", **opt)
+            ntrackster_row.append(p)
+            p = plot_bokeh([hacc.hfracsel1.project("fracsel"), hacc.hfracsel2.project("fracsel"),
+                            hacc.hfracsel5.project("fracsel"), hacc.hfracsel10.project("fracsel")],
+                           title=title, density=True,
+                           xlabel="Fraction of the total trackster energy in an event after saturation removal", **opt)
             ntrackster_row.append(p)
             opt = dict(legs=[''])
             # p = plot_bokeh(hacc.hntrackster.project("n"),
