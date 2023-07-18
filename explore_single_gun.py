@@ -18,12 +18,23 @@ import warnings
 from bokeh import models as bm
 from bokeh.layouts import layout
 from bokeh.palettes import Colorblind as palette, OrRd9 as palette_2d
+palette = palette[8]
 from bokeh.plotting import figure, save, output_file
 from bokeh.transform import linear_cmap
 
 import matplotlib; import matplotlib.pyplot as plt
 import mplhep as hep
 plt.style.use(hep.style.ROOT)
+
+def histedges_equalN(x, nbins):
+    """
+    Define bin boundaries with the same numbers of events.
+    `x` represents the array to be binned.
+    """
+    npt = len(x)
+    return np.interp(np.linspace(0, npt, nbins+1),
+                     np.arange(npt),
+                     np.sort(x))
 
 class DatumManip():
     def __init__(self, datum):
@@ -87,7 +98,7 @@ class DisplayEvent():
 
     def _plot_bokeh(self, data, evid):
         assert len(data) == len(evid)
-        colors = palette[8] * 10
+        colors = palette * 10
 
         vpairs = (('x', 'y'),
                   ('z', 'R'), ('z', 'x'), ('z', 'y'),
@@ -109,7 +120,7 @@ class DisplayEvent():
 
             lc_colors = np.array(lc_colors)
             id_tracksters = np.array(id_tracksters)
-
+            
             manip = DatumManip(datum)
             source = bm.ColumnDataSource(data=dict(x=manip.x, y=manip.y, z=manip.z, R=manip.R, L=manip.L,
                                                    size=4*manip.e, size_init=np.copy(4*manip.e), c=lc_colors))
@@ -171,16 +182,16 @@ class DisplayEvent():
                     thisp.ygrid.grid_line_alpha = 0.5
                     thisp.ygrid.grid_line_dash = [6, 4]
                     thisp.xgrid.grid_line_color = None
-                    thisp.xaxis.axis_label = vlabels[iv][0]
                     thisp.outline_line_color = None
 
                 p.ygrid.grid_line_color = None
                 p.yaxis.axis_label = vlabels[iv][1]
                 p.min_border_bottom = 0
-                p.xaxis.major_label_text_font_size = '0pt'
+                #p.xaxis.major_label_text_font_size = '0pt'
                 p_lo.yaxis.axis_label = "Energy [GeV]"
                 p_lo.min_border_top = 0
                 p_lo.ygrid.grid_line_color = "gray"
+                p_lo.xaxis.axis_label = vlabels[iv][0]
                 
                 row_hi.append(p)
                 row_lo.append(p_lo)
@@ -218,6 +229,7 @@ class DisplayEvent():
                     
     def _select_vars(self):
         v = ["gunparticle_.*", "multiclus_.*", "cluster2d_.*",]
+        #v += ["simcluster_.*", "gen_.*"]
         v += ["event",]
         return set(v)
         
@@ -228,7 +240,8 @@ class AccumulateHistos():
         self.nbins = 50
         self.types = ('hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
                       'hfrac1', 'hfrac2', 'hfrac5', 'hfrac10',
-                      'hfracsel1', 'hfracsel2', 'hfracsel5', 'hfracsel10',)
+                      'hfracsel1', 'hfracsel2', 'hfracsel5', 'hfracsel10',
+                      'hfrac_em_had', 'hresp', 'hresp_ceh', 'hresp_cee')
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
 
@@ -283,6 +296,30 @@ class AccumulateHistos():
         self.hfracsel5.fill(fracsel = frac_sel(5))
         self.hfracsel10.fill(fracsel = frac_sel(10))
 
+        def frac_ceh():
+            num_ceh = ak.sum(data.cluster2d_energy[data.cluster2d_layer > 26], axis=1)
+            num_cee = ak.sum(data.cluster2d_energy[data.cluster2d_layer <= 26], axis=1)
+            den = ak.sum(data.cluster2d_energy, axis=1)
+            den_gen = ak.ravel(data.gunparticle_energy)
+            frac_ceh = num_ceh/den
+            frac_cee = num_cee/den
+            thresh = 0.91
+
+            num_resp_ceh = ak.sum(data.cluster2d_energy[frac_ceh>thresh], axis=1)
+            den_resp_ceh = ak.ravel(data.gunparticle_energy[frac_ceh>thresh])
+            
+            num_resp_cee = ak.sum(data.cluster2d_energy[frac_cee<thresh], axis=1)
+            den_resp_cee = ak.ravel(data.gunparticle_energy[frac_cee<thresh])
+            
+            return (frac_ceh, frac_cee, num_ceh/den_gen, num_cee/den_gen,
+                    (den/den_gen)-1, (num_resp_ceh/den_resp_ceh)-1, (num_resp_cee/den_resp_cee)-1)
+
+        fceh = frac_ceh()
+        self.hfrac_em_had.fill(frac_ceh=fceh[0], frac_cee=fceh[1], frac_ceh_gen=fceh[2], frac_cee_gen=fceh[3])
+        self.hresp.fill(resp=fceh[4])
+        self.hresp_ceh.fill(resp=fceh[5])
+        self.hresp_cee.fill(resp=fceh[6])
+        
     def _load(self):
         for t in self.types:
             with open(op.join(self.adir, t + self.pickle_ext), 'rb') as f:
@@ -333,6 +370,19 @@ class AccumulateHistos():
         setattr(self, 'hfracsel5', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="fracsel")))
         setattr(self, 'hfracsel10', hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="fracsel")))
 
+        setattr(self, 'hfrac_em_had', hist.Hist(
+            hist.axis.Regular(self.nbins, 0.,  1., name="frac_ceh"),
+            hist.axis.Regular(self.nbins, 0.,  1., name="frac_cee"),
+            hist.axis.Regular(self.nbins, 0.,  1., name="frac_ceh_gen"),
+            hist.axis.Regular(self.nbins, 0.,  1., name="frac_cee_gen"),
+        ))
+        setattr(self, 'hresp', hist.Hist(
+            hist.axis.Regular(self.nbins, -1, 0.5, name="resp"),))
+        setattr(self, 'hresp_cee', hist.Hist(
+            hist.axis.Regular(self.nbins, -1, 0.5, name="resp"),))
+        setattr(self, 'hresp_ceh', hist.Hist(
+            hist.axis.Regular(self.nbins, -1, 0.5, name="resp"),))
+        
         allvars = self._select_vars()
         for batch in tqdm(up.iterate(infiles + ":" + tree, 
                                      step_size=10000, library='ak',
@@ -504,7 +554,7 @@ def explore_single_gun(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = (op.join(base, "SinglePion_0PU_10En200_11Jul/step3/step3_*.root"),
+    infiles = (op.join(base, "SinglePion_0PU_10En200_11Jul/step3/step3_1.root"),
                #op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root")
                )
     tags = ('clue3d',) #('clue3d', 'linking')
@@ -543,6 +593,26 @@ def explore_single_gun(args):
                                title=title, xlabel=xlabels[avar], **opt)
                 trackster_row.append(p)
 
+            fracs_row = []
+            opt = dict(legs=['CEH En. Fraction', 'CEH En. Fraction with respect to Gen En.'],
+                       legloc="top_left")
+            p = plot_bokeh([hacc.hfrac_em_had.project("frac_ceh"), hacc.hfrac_em_had.project("frac_ceh_gen")],
+                           title=title, density=True, xlabel="Fraction", **opt)
+            fracs_row.append(p)
+            opt = dict(legs=['CEE En. Fraction', 'CEE En. Fraction with respect to Gen En.'],
+                       legloc="top_right")
+            p = plot_bokeh([hacc.hfrac_em_had.project("frac_cee"), hacc.hfrac_em_had.project("frac_cee_gen")],
+                           title=title, density=True, xlabel="Fraction", **opt)
+            fracs_row.append(p)
+            p = plot_bokeh([hacc.hresp.project("resp"), hacc.hresp_ceh.project("resp"),
+                            hacc.hresp_cee.project("resp")], legs=['Full', 'CEH', 'CEE'],
+                           title=title, density=True, xlabel="Layer Clusters' Response")
+            respmax = max(hacc.hresp.project("resp").density())
+            respmin = min(hacc.hresp.project("resp").density())
+            p.line(x=[0., 0.], y=[respmin,respmax], line_color='black', line_width=2,
+                   color='gray', line_dash='dashed')
+            fracs_row.append(p)
+                
             ntrackster_row = []
             opt = dict(legs=['highest-energy trackster', '2 highest-energy tracksters',
                              '5 highest-energy tracksters', '10 highest-energy tracksters'],
@@ -588,7 +658,8 @@ def explore_single_gun(args):
                            mode='2d', **opt)
             ntrackster_2d_row.append(p)
 
-            lay = layout([gen_row, trackster_row, ntrackster_row, ntrackster_2d_split_row, ntrackster_2d_row])
+            lay = layout([gen_row, trackster_row, fracs_row,
+                          ntrackster_row, ntrackster_2d_split_row, ntrackster_2d_row])
             save(lay)
     
 if __name__ == "__main__":
