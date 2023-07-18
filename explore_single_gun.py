@@ -17,7 +17,7 @@ import warnings
 
 from bokeh import models as bm
 from bokeh.layouts import layout
-from bokeh.palettes import Dark2_5 as palette, OrRd9 as palette_2d
+from bokeh.palettes import Colorblind as palette, OrRd9 as palette_2d
 from bokeh.plotting import figure, save, output_file
 from bokeh.transform import linear_cmap
 
@@ -25,6 +25,49 @@ import matplotlib; import matplotlib.pyplot as plt
 import mplhep as hep
 plt.style.use(hep.style.ROOT)
 
+class DatumManip():
+    def __init__(self, datum):
+        self.datum = datum
+        avars = ('x', 'y', 'z', 'R', 'L', 'e')
+        self.ntracksters = len(self.datum['e'])
+        for avar in avars:
+            # self.x, self.y, ...
+            setattr(self, avar, self.flatten(avar))
+            # self.x_un, self.y_un, ...
+            setattr(self, avar + '_un', np.unique(getattr(self, avar)))
+            # self.x_trk, self.y_trk, ...
+            st = self.sum_tracksters(avar)
+            # self.x_trk, self.y_trk, ...
+            setattr(self, avar + '_trk', st[0])
+            # self.x_range, self.y_range, ...
+            setattr(self, avar + '_range', st[1])
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def flatten(self, v):
+        """Flattens the array into one dimension."""
+        return ak.flatten(self.datum[v]).to_numpy()
+
+    def sum_tracksters(self, v):
+        """
+        Sums the energy of each trackster binned in `v`. Helpful to, for instance,
+        show how much energy each trackster deposited in each layer.
+        All unique values of `v` are also returned for convenience.
+        """
+        un = np.unique(self.flatten(v))
+        arr = []
+        for n in range(self.ntracksters):
+            arr.append([])
+            for bin in un:
+                arr[n].append(sum(self.datum['e'][n][self.datum[v][n]==bin]))
+
+        # if computational efficiency is needed, try something like:
+        # flat_int = lambda v : ak.flatten(datum[v]).to_numpy().astype(int)
+        # wght_sum = lambda v : np.bincount(flat_int(v), weights=ak.flatten(datum['e']).to_numpy(), minlength=51)[1:]
+        # the first entry corresponds to "layer 0", which does not exist, hence [1:]
+        return arr, un
+        
 class DisplayEvent():
     def __init__(self, tree, infiles, outpath, tag):
         self.tag = tag
@@ -44,15 +87,16 @@ class DisplayEvent():
 
     def _plot_bokeh(self, data, evid):
         assert len(data) == len(evid)
-        colors = it.cycle(palette)
+        colors = palette[8] * 10
+
         vpairs = (('x', 'y'),
                   ('z', 'R'), ('z', 'x'), ('z', 'y'),
                   ('L', 'R'), ('L', 'x'), ('L', 'y'))
         vlabels = (('x [cm]', 'y [cm]'),
                    ('z [cm]', 'R [cm]'), ('z [cm]', 'x [cm]'), ('z [cm]', 'y [cm]'),
                    ('Layer', 'R [cm]'), ('Layer', 'x [cm]'),  ('Layer', 'y [cm]'))
-        line_opt_z = dict(x=[364.5, 364.5], color='gray', line_dash="dashed")
-        line_opt_L = dict(x=[26.5, 26.5],   color='gray', line_dash="dashed")
+        line_opt_z = dict(x=[364.5, 364.5], color='gray', line_dash='dashed')
+        line_opt_L = dict(x=[26.5, 26.5],   color='gray', line_dash='dashed')
         lay = []
         for idat, datum in enumerate(data):
             row_hi, row_lo = ([] for _ in range(2))
@@ -60,27 +104,39 @@ class DisplayEvent():
             lc_colors, id_tracksters = ([] for _ in range(2))
             for ilcc,lcc in enumerate(lc_counts):
                 id_tracksters.extend([ilcc for _ in range(lcc)])
-                nc = next(colors)
+                nc = colors[ilcc]
                 lc_colors.extend([nc for _ in range(lcc)])
 
             lc_colors = np.array(lc_colors)
             id_tracksters = np.array(id_tracksters)
-            source = bm.ColumnDataSource(data=dict(x=ak.flatten(datum['x']).to_numpy(),
-                                                   y=ak.flatten(datum['y']).to_numpy(),
-                                                   z=ak.flatten(datum['z']).to_numpy(),
-                                                   L=ak.flatten(datum['L']).to_numpy(),
-                                                   R=ak.flatten(datum['R']).to_numpy(),
-                                                   size=ak.flatten(datum['e']).to_numpy(),
-                                                   size_init=ak.flatten(datum['e']).to_numpy(),
-                                                   c=lc_colors))
-                                         
 
+            manip = DatumManip(datum)
+            source = bm.ColumnDataSource(data=dict(x=manip.x, y=manip.y, z=manip.z, R=manip.R, L=manip.L,
+                                                   size=4*manip.e, size_init=np.copy(4*manip.e), c=lc_colors))
+
+            en_x_bins = [sum(manip.e[manip.x == xx]) for xx in manip.x_un]
+            en_L_bins = [sum(manip.e[manip.L == xx]) for xx in manip.L_un]
+            en_z_bins = [sum(manip.e[manip.z == xx]) for xx in manip.z_un]
+            source_long = bm.ColumnDataSource(data=dict(
+                z=manip.z_un, L=manip.L_un, en_z=en_z_bins, en_L=en_L_bins))
+            source_tran = bm.ColumnDataSource(data=dict(x=manip.x_un, en_x=en_x_bins))
+                                                   
             for iv,vp in enumerate(vpairs):
                 p = figure(height=350, width=700, background_fill_color="white",
-                           title="Event {} | {} vs. {}".format(evid[idat], vp[0], vp[1]))
+                           title="Event {} | {} vs. {}".format(evid[idat], vp[0], vp[1]))                    
                 p.circle(x=vp[0], y=vp[1], color='c', size='size', source=source)
-                p_lo = figure(height=200, width=700, background_fill_color="white", title="", x_range=p.x_range)
-                p_lo.circle(x=vp[0], y='size_init', color='c', size=3, source=source)
+
+                p_lo = figure(height=150, width=700, background_fill_color="white", title="", x_range=p.x_range)
+                # stmp = source_tran if vp[0] == 'x' else source_long
+                # p_lo.circle(x=vp[0], y='en_'+vp[0], color='black', size=5, source=stmp)
+                # p_lo.line(x=vp[0], y='en_'+vp[0], line_color='black', line_width=2, source=stmp)
+
+                thisxrange = manip[vp[0]+'_range']
+                for itrk in range(manip.ntracksters):
+                    thisc = colors[itrk]
+                    p_lo.circle(x=thisxrange, y=manip[vp[0]+'_trk'][itrk], color=thisc, size=6)
+                    p_lo.line(x=thisxrange, y=manip[vp[0]+'_trk'][itrk], line_color=thisc, line_width=2)
+
                 for itrk in np.unique(id_tracksters):
                     ax = ak.flatten(datum['x'])[id_tracksters == itrk]
                     ay = ak.flatten(datum['e'])[id_tracksters == itrk]
@@ -112,21 +168,24 @@ class DisplayEvent():
                     thisp.toolbar.logo = None
                     thisp.title.align = "left"
                     thisp.title.text_font_size = "15px"
+                    thisp.ygrid.grid_line_alpha = 0.5
+                    thisp.ygrid.grid_line_dash = [6, 4]
                     thisp.xgrid.grid_line_color = None
-                    thisp.ygrid.grid_line_color = None
                     thisp.xaxis.axis_label = vlabels[iv][0]
                     thisp.outline_line_color = None
 
+                p.ygrid.grid_line_color = None
                 p.yaxis.axis_label = vlabels[iv][1]
                 p.min_border_bottom = 0
-                p_lo.min_border_top = 0
-                # p.xaxis.major_label_text_font_size = '0pt'
+                p.xaxis.major_label_text_font_size = '0pt'
                 p_lo.yaxis.axis_label = "Energy [GeV]"
+                p_lo.min_border_top = 0
+                p_lo.ygrid.grid_line_color = "gray"
                 
                 row_hi.append(p)
                 row_lo.append(p_lo)
 
-            slider = bm.Slider(title='Layer Cluster size (multiple of energy in GeV)', value=1., start=0.1, end=4., step=0.1, width=700)
+            slider = bm.Slider(title='Layer Cluster size', value=1., start=0.1, end=4., step=0.1, width=700)
             callback = bm.CustomJS(args=dict(source=source), code="""
             var val = cb_obj.value;
             var data = source.data;
@@ -148,6 +207,7 @@ class DisplayEvent():
         ntracksters = ak.count(data.multiclus_eta, axis=1)[evid]
         get_info = lambda v : [getattr(data, 'cluster2d_' + v)[evid, data.multiclus_cluster2d[evid][k]]
                                for k in range(ntracksters)]
+
         lc_x = get_info('x')
         lc_y = get_info('y')
         lc_z = get_info('z')
@@ -310,7 +370,7 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
 
     p = figure(height=400, width=600, background_fill_color="white", title=title,
                y_axis_type='log' if ylog else 'linear',
-               tools="save,box_zoom,wheel_zoom,reset,undo,redo")
+               tools="save,box_select,box_zoom,wheel_zoom,reset,undo,redo")
     for h,l in zip(hists, legs):
         if mode == '2d':
             xbins  = np.array([x for x in h.axes[0].centers for _ in range(len(h.axes[1].centers))])
@@ -444,7 +504,7 @@ def explore_single_gun(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = (op.join(base, "SinglePion_0PU_10En200_11Jul/step3/step3_1.root"),
+    infiles = (op.join(base, "SinglePion_0PU_10En200_11Jul/step3/step3_*.root"),
                #op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root")
                )
     tags = ('clue3d',) #('clue3d', 'linking')
