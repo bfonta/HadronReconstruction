@@ -9,6 +9,7 @@ import awkward as ak
 import glob
 import numpy as np
 import uproot as up
+import pandas as pd
 
 from bokeh import models as bm
 from bokeh.layouts import layout
@@ -63,11 +64,255 @@ class DatumManip():
         # wght_sum = lambda v : np.bincount(flat_int(v), weights=ak.flatten(datum['e']).to_numpy(), minlength=51)[1:]
         # the first entry corresponds to "layer 0", which does not exist, hence [1:]
         return arr, un
+
+class Plot():
+    def __init__(self, outpath, lc, sh, evid, tag='default'):
+        self.libraries = ('mpl', 'bokeh', 'dash')
+        self.colors = palette * 100
+        self.lc = lc
+        self.sh = sh
+        self.evid = evid
+        self.tag = tag
+        self._check_dims()
+
+        self.vpairs = {('x', 'y'): ('x [cm]', 'y [cm]'),
+                       ('z', 'R'): ('z [cm]', 'R [cm]'),
+                       ('z', 'x'): ('z [cm]', 'x [cm]'),
+                       ('z', 'y'): ('z [cm]', 'y [cm]'),
+                       # ('L', 'R'): ('Layer', 'R [cm]'),
+                       # ('L', 'x'): ('Layer', 'x [cm]'),
+                       # ('L', 'y'): ('Layer', 'y [cm]'),
+                       }
+
+        self.opt_line_z = dict(x=[364.5, 364.5], color='gray', line_dash='dashed')
+        self.opt_line_L = dict(x=[26.5, 26.5],   color='gray', line_dash='dashed')
+
+        self.savefig = lambda x : op.join(outpath, x)
         
+        self.width = {'bokeh': 800, 'dash': 800, 'mpl': 800}
+
+    def _add_vertical_line(self, fig, data, avars, lib):
+        assert lib in self.libraries
+        
+        if avars[0] in ('z', 'L'):
+            xmin, xmax = ak.min(data['x']), ak.max(data['x'])
+            ymin, ymax = ak.min(data['y']), ak.max(data['y'])
+            rmin, rmax = ak.min(data['R']), ak.max(data['R'])
+            if lib == 'bokeh':
+                if avars[0] == 'z':
+                    if avars[1] == 'x':
+                        fig.line(y=[xmin, xmax], **self.opt_line_z)
+                    if avars[1] == 'y':
+                        fig.line(y=[ymin, ymax], **self.opt_line_z)
+                    elif avars[1] == 'R':
+                        fig.line(y=[rmin, rmax], **self.opt_line_z)
+                elif avars[0] == 'L':
+                    if avars[1] == 'x':
+                        fig.line(y=[xmin, xmax], **self.opt_line_L)
+                    elif avars[1] == 'y':
+                        fig.line(y=[ymin, ymax], **self.opt_line_L)
+                    elif avars[1] == 'R':
+                        fig.line(y=[rmin, rmax], **self.opt_line_L)
+            elif lib == 'dash':
+                raise NotImplementedError()
+            elif lib == 'mpl':
+                raise NotImplementedError()
+
+    def bokeh(self):
+        """Produces a bokeh interactive plot layout."""
+        fname = 'events_display_' + self.tag
+        ext = '.html'
+        bp.output_file(self.savefig(fname) + ext)
+        lay = layout(self._create_layout('bokeh'))
+        bp.save(lay)
+
+    def _check_dims(self):
+        assert len(self.lc) == len(self.evid)
+        assert len(self.sh) == len(self.evid)
+
+    def dash(self):
+        """Produces a dash interactive plot layout."""
+        self._create_layout('dash')
+
+    def _data_single_event(self, evid):
+        """Access single event data"""
+        return self.lc[evid], self.sh[evid]
+
+    def _data_manip_single_event(self, evid):
+        """Access single event data with helper class"""
+        lc_datum = self.lc[evid]
+        sh_datum = self.sh[evid]
+        return DatumManip(lc_datum, tracksters=True), DatumManip(sh_datum)     
+
+    def mpl(self):
+        NotImplementedError()
+
+    def _common_bokeh_attributes(self, fig):
+        fig.output_backend = 'svg'
+        fig.toolbar.logo = None
+        fig.title.align = "left"
+        fig.title.text_font_size = "15px"
+        fig.ygrid.grid_line_alpha = 0.5
+        fig.ygrid.grid_line_dash = [6, 4]
+        fig.xgrid.grid_line_color = None
+        fig.outline_line_color = None
+
+    def _create_layout(self, lib):
+        lay = []
+
+        for idat in self.evid: # loop per event
+            row_hi, row_lo = ([] for _ in range(2))
+
+            lc_manip, sh_manip = self._data_manip_single_event(idat)
+            lc_source, sh_source = self._preprocess(idat, lib)
+                                                   
+            for vk,vv in self.vpairs.items():
+                if lib == 'bokeh':
+                    popt = dict(ev=self.evid[idat], avars=vk, labels=vv)
+
+                    p = self._single_bokeh_plot(lc_source, sh_source, **popt)
+                    self._add_vertical_line(fig=p, data=sh_manip, avars=vk, lib=lib)
+
+                    zoomx, zoomy = self._zoom_ranges(sh_manip, avars=vk, gapx=0.03, gapy=0.1)
+                    p.x_range = bm.Range1d(zoomx[0], zoomx[1])
+                    p.y_range = bm.Range1d(zoomy[0], zoomy[1])
+                    
+                    p_lo = self._single_bokeh_subplot(p, lc_manip, sh_manip, **popt)
+                    slider = self._single_bokeh_slider(lc_source, sh_source)
+                    
+                elif lib == 'dash':
+                    p = self._single_dash_plot()
+                elif lib == 'mpl':
+                    p = self._single_mpl_plot()
+
+                row_hi.append(p)
+                if lib == 'bokeh':
+                    row_lo.append(p_lo)
+
+            if lib == 'bokeh':
+                lay.append(slider)
+            lay.append(row_hi)
+            if lib == 'bokeh':
+                lay.append(row_lo)
+
+        return lay
+
+    def _preprocess(self, evid, lib):
+        assert lib in self.libraries
+
+        lc_datum, sh_datum = self._data_single_event(evid)
+        lc_manip, sh_manip = self._data_manip_single_event(evid)
+        
+        # handle colors of layer clusters
+        lc_counts = [ak.count(x) for x in lc_datum['x']]
+        lc_colors = []
+        for ilcc,lcc in enumerate(lc_counts):
+            nc = self.colors[ilcc]
+            lc_colors.extend([nc for _ in range(lcc)])
+        lc_colors = np.array(lc_colors)
+            
+        sf = 3
+        
+        lc_source = dict(x=lc_manip.x, y=lc_manip.y, z=lc_manip.z, R=lc_manip.R, L=lc_manip.L,
+                         size=sf*lc_manip.e, size_init=np.copy(sf*lc_manip.e), c=lc_colors)
+        sh_source = dict(x=sh_manip.x, y=sh_manip.y, z=sh_manip.z, R=sh_manip.R, L=sh_manip.L,
+                         size=2*sf*sh_manip.e, size_init=np.copy(2*sf*sh_manip.e),
+                         c=[self.colors[k] for k in sh_manip.c])
+
+        if lib == 'bokeh':
+            lc_source = bm.ColumnDataSource(data=lc_source)
+            sh_source = bm.ColumnDataSource(data=sh_source)
+        elif lib == 'dash':
+            lc_source = pd.DataFrame(lc_source)
+            sh_source = pd.DataFrame(sh_source)
+        elif lib == 'mpl':
+            raise NotImplementedError()
+
+        return lc_source, sh_source
+
+    def _single_bokeh_plot(self, lc_source, sh_source, ev, avars, labels):
+        p = bp.figure(height=500, width=self.width['bokeh'], background_fill_color="white",
+                      title="Event {} | {} vs. {}".format(ev, avars[0], avars[1]),
+                      tools="pan,save,box_select,box_zoom,wheel_zoom,reset,undo,redo")
+        p.circle(x=avars[0], y=avars[1], color='c', size='size', source=lc_source, legend_label="LCs")
+        p.circle(x=avars[0], y=avars[1], color='c', size='size', alpha=0.3, source=sh_source, legend_label="SimHits")
+
+        self._common_bokeh_attributes(p)
+        
+        p.ygrid.grid_line_color = None
+        p.yaxis.axis_label = labels[1]
+        p.min_border_bottom = 0
+        p.legend.click_policy='hide'
+        p.legend.location = "top_right"
+        p.legend.label_text_font_size = '12pt'
+        #p.xaxis.major_label_text_font_size = '0pt'
+        return p
+
+    def _single_bokeh_slider(self, lc_source, sh_source):
+        """Creates slider to control widget size."""
+        slider = bm.Slider(title='Layer Cluster size', value=1., start=0.1, end=10., step=0.1, width=self.width['bokeh'])
+        callback = bm.CustomJS(args=dict(s1=lc_source, s2=sh_source), code="""
+        var val = cb_obj.value;
+        var data1 = s1.data;
+        var data2 = s2.data;
+        for (var i=0; i<data1.size_init.length; i++) {
+        data1.size[i] = val * data1.size_init[i];
+        }
+        for (var i=0; i<data2.size_init.length; i++) {
+        data2.size[i] = val * data2.size_init[i];
+        }
+        s1.change.emit();
+        s2.change.emit();
+        """)
+        slider.js_on_change('value', callback)
+        return slider
+
+    def _single_bokeh_subplot(self, main_plot, lc_data, sh_data, ev, avars, labels):
+        """
+        Subplot to be placed under the main plot.
+        Shows a 1D distribution of summer layer cluster energy.
+        """
+        p = bp.figure(height=150, width=self.width['bokeh'], background_fill_color="white",
+                      title="", x_range=main_plot.x_range, tools="pan")
+
+        self._common_bokeh_attributes(p)
+        
+        thisxrange = lc_data[avars[0]+'_range']
+        for itrk in range(lc_data.ntracksters):
+            thisc = self.colors[itrk]
+            p.circle(x=thisxrange, y=lc_data[avars[0]+'_trk'][itrk], color=thisc, size=6)
+            p.line(x=thisxrange, y=lc_data[avars[0]+'_trk'][itrk], line_color=thisc, line_width=2)
+
+        p.yaxis.axis_label = "Energy [GeV]"
+        p.min_border_top = 0
+        p.ygrid.grid_line_color = "gray"
+        p.xaxis.axis_label = labels[0]
+
+        return p
+
+
+    def _single_dash_plot(self):
+        raise NotImplementedError()
+
+    def _single_mpl_plot(self):
+        raise NotImplementedError()
+    
+    def _zoom_ranges(self, data, avars, gapx, gapy):
+        """
+        Provide the ranges of a zoom on the data, with respect to its minima and maxima.
+        Cuts `gapx/y` percent of the ranges on both sides.
+        """
+        max_x, min_x = np.max(data[avars[0]]), np.min(data[avars[0]])
+        diff_x = max_x - min_x
+        max_y, min_y = np.max(data[avars[1]]), np.min(data[avars[1]])
+        diff_y = max_y - min_y
+        x_range = min_x + gapx*diff_x, max_x - gapx*diff_x
+        y_range = min_y + gapy*diff_y, max_y - gapy*diff_y
+        return x_range, y_range
+
 class DisplayEvent():
     def __init__(self, tree, infiles, outpath, tag):
         self.tag = tag
-        self.savef = lambda x : op.join(outpath, x)
 
         allvars = self._select_vars()
         lc_data, sh_data = ([] for _ in range(2))
@@ -82,144 +327,12 @@ class DisplayEvent():
                 sh_data.append(simhits)
             break
 
-        self._plot_bokeh(lc_data, sh_data, [x for x in range(nplots)])
-
+        p = Plot(outpath, lc_data, sh_data, [x for x in range(nplots)], tag)
+        p.bokeh()
+        # p.dash()
+        
     def _calculate_radius(self, x, y):
         return [np.sqrt(a**2 + b**2) for a,b in zip(x,y)]
-    
-    def _plot_bokeh(self, lc_data, sh_data, evid):
-        assert len(lc_data) == len(evid)
-        assert len(sh_data) == len(evid)
-
-        colors = palette * 100
-        
-        vpairs = {('x', 'y'): ('x [cm]', 'y [cm]'),
-                  ('z', 'R'): ('z [cm]', 'R [cm]'),
-                  ('z', 'x'): ('z [cm]', 'x [cm]'),
-                  ('z', 'y'): ('z [cm]', 'y [cm]'),
-                  # ('L', 'R'): ('Layer', 'R [cm]'),
-                  # ('L', 'x'): ('Layer', 'x [cm]'),
-                  # ('L', 'y'): ('Layer', 'y [cm]'),
-                  }
-
-        line_opt_z = dict(x=[364.5, 364.5], color='gray', line_dash='dashed')
-        line_opt_L = dict(x=[26.5, 26.5],   color='gray', line_dash='dashed')
-        lay = []
-
-        for idat, (lc_datum, sh_datum) in enumerate(zip(lc_data,sh_data)): # loop per event
-            row_hi, row_lo = ([] for _ in range(2))
-
-            # handle colors of layer clusters
-            lc_counts = [ak.count(x) for x in lc_datum['x']]
-            lc_colors, id_tracksters = ([] for _ in range(2))
-            for ilcc,lcc in enumerate(lc_counts):
-                id_tracksters.extend([ilcc for _ in range(lcc)])
-                nc = colors[ilcc]
-                lc_colors.extend([nc for _ in range(lcc)])
-            lc_colors = np.array(lc_colors)
-            id_tracksters = np.array(id_tracksters)
-
-            sf = 3
-            lc_manip = DatumManip(lc_datum, tracksters=True)
-            lc_source = bm.ColumnDataSource(data=dict(x=lc_manip.x, y=lc_manip.y, z=lc_manip.z, R=lc_manip.R, L=lc_manip.L,
-                                                      size=sf*lc_manip.e, size_init=np.copy(sf*lc_manip.e), c=lc_colors))
-            sh_manip = DatumManip(sh_datum)
-            sh_source = bm.ColumnDataSource(data=dict(x=sh_manip.x, y=sh_manip.y, z=sh_manip.z, R=sh_manip.R, L=sh_manip.L,
-                                                      size=2*sf*sh_manip.e, size_init=np.copy(2*sf*sh_manip.e),
-                                                      c=[colors[k] for k in sh_manip.c]))
-                                                   
-            for vk,vv in vpairs.items():
-                width = 800
-                p = bp.figure(height=500, width=width, background_fill_color="white",
-                              title="Event {} | {} vs. {}".format(evid[idat], vk[0], vk[1]),
-                              tools="pan,save,box_select,box_zoom,wheel_zoom,reset,undo,redo")
-                p.circle(x=vk[0], y=vk[1], color='c', size='size', source=lc_source, legend_label="LCs")
-                p.circle(x=vk[0], y=vk[1], color='c', size='size', alpha=0.3, source=sh_source, legend_label="SimHits")
-
-                gap_x, gap_y = 0.03, 0.1
-                _max_x, _min_x = np.max(sh_manip[vk[0]]), np.min(sh_manip[vk[0]])
-                _diff_x = _max_x - _min_x
-                _max_y, _min_y = np.max(sh_manip[vk[1]]), np.min(sh_manip[vk[1]])
-                _diff_y = _max_y - _min_y
-                p.x_range = bm.Range1d(_min_x + gap_x*_diff_x, _max_x - gap_x*_diff_x)
-                p.y_range = bm.Range1d(_min_y + gap_y*_diff_y, _max_y - gap_y*_diff_y)
-                
-                p_lo = bp.figure(height=150, width=width, background_fill_color="white", title="",
-                                 x_range=p.x_range, tools="pan")
-
-                thisxrange = lc_manip[vk[0]+'_range']
-                for itrk in range(lc_manip.ntracksters):
-                    thisc = colors[itrk]
-                    p_lo.circle(x=thisxrange, y=lc_manip[vk[0]+'_trk'][itrk], color=thisc, size=6)
-                    p_lo.line(x=thisxrange, y=lc_manip[vk[0]+'_trk'][itrk], line_color=thisc, line_width=2)
-                
-                if vk[0] in ('z', 'L'):
-                    xmin, xmax = ak.min(sh_datum['x']), ak.max(sh_datum['x'])
-                    ymin, ymax = ak.min(sh_datum['y']), ak.max(sh_datum['y'])
-                    rmin, rmax = ak.min(sh_datum['R']), ak.max(sh_datum['R'])
-                    if vk[0] == 'z':
-                        if vk[1] == 'x':
-                            p.line(y=[xmin, xmax], **line_opt_z)
-                        if vk[1] == 'y':
-                            p.line(y=[ymin, ymax], **line_opt_z)
-                        elif vk[1] == 'R':
-                            p.line(y=[rmin, rmax], **line_opt_z)
-                    elif vk[0] == 'L':
-                        if vk[1] == 'x':
-                            p.line(y=[xmin, xmax], **line_opt_L)
-                        elif vk[1] == 'y':
-                            p.line(y=[ymin, ymax], **line_opt_L)
-                        elif vk[1] == 'R':
-                            p.line(y=[rmin, rmax], **line_opt_L)
-
-                for thisp in (p, p_lo):
-                    thisp.output_backend = 'svg'
-                    thisp.toolbar.logo = None
-                    thisp.title.align = "left"
-                    thisp.title.text_font_size = "15px"
-                    thisp.ygrid.grid_line_alpha = 0.5
-                    thisp.ygrid.grid_line_dash = [6, 4]
-                    thisp.xgrid.grid_line_color = None
-                    thisp.outline_line_color = None
-
-                p.ygrid.grid_line_color = None
-                p.yaxis.axis_label = vv[1]
-                p.min_border_bottom = 0
-                p.legend.click_policy='hide'
-                p.legend.location = "top_right"
-                p.legend.label_text_font_size = '12pt'
-
-                #p.xaxis.major_label_text_font_size = '0pt'
-                p_lo.yaxis.axis_label = "Energy [GeV]"
-                p_lo.min_border_top = 0
-                p_lo.ygrid.grid_line_color = "gray"
-                p_lo.xaxis.axis_label = vv[0]
-                
-                row_hi.append(p)
-                row_lo.append(p_lo)
-
-            slider = bm.Slider(title='Layer Cluster size', value=1., start=0.1, end=10., step=0.1, width=width)
-            callback = bm.CustomJS(args=dict(s1=lc_source, s2=sh_source), code="""
-            var val = cb_obj.value;
-            var data1 = s1.data;
-            var data2 = s2.data;
-            for (var i=0; i<data1.size_init.length; i++) {
-            data1.size[i] = val * data1.size_init[i];
-            }
-            for (var i=0; i<data2.size_init.length; i++) {
-            data2.size[i] = val * data2.size_init[i];
-            }
-            s1.change.emit();
-            s2.change.emit();
-            """)
-            slider.js_on_change('value', callback)
-            lay.append(slider)
-            lay.append(row_hi)
-            lay.append(row_lo)
-        
-        bp.output_file(self.savef('events_display_' + self.tag)+'.html')
-        lay = layout(lay)
-        bp.save(lay)
 
     def _process_layer_cluster(self, data, evid):
         ntracksters = ak.count(data.multiclus_eta, axis=1)[evid]
@@ -263,7 +376,6 @@ class DisplayEvent():
 def event_display(args):
     """Data exploration."""
     outpath = "/eos/user/b/bfontana/www/HadronReco"
-    savef = lambda x : op.join(outpath, x)
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
