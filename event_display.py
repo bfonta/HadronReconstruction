@@ -11,11 +11,18 @@ import numpy as np
 import uproot as up
 import pandas as pd
 
+# bokeh
 from bokeh import models as bm
 from bokeh.layouts import layout
 from bokeh.palettes import Colorblind as palette
 palette = palette[8]
 from bokeh import plotting as bp
+
+# dash
+from dash import Dash, dcc, html, Input, Output
+import plotly
+import plotly.express as px
+import dash_bootstrap_components as dbc
 
 class DatumManip():
     def __init__(self, datum, tracksters=False):
@@ -72,9 +79,11 @@ class Plot():
         self.lc = lc
         self.sh = sh
         self.evid = evid
-        self.tag = tag
         self._check_dims()
 
+        self.outpath = outpath
+        self.fname = 'events_display_' + tag
+        
         self.vpairs = {('x', 'y'): ('x [cm]', 'y [cm]'),
                        ('z', 'R'): ('z [cm]', 'R [cm]'),
                        ('z', 'x'): ('z [cm]', 'x [cm]'),
@@ -87,7 +96,8 @@ class Plot():
         self.opt_line_z = dict(x=[364.5, 364.5], color='gray', line_dash='dashed')
         self.opt_line_L = dict(x=[26.5, 26.5],   color='gray', line_dash='dashed')
 
-        self.savefig = lambda x : op.join(outpath, x)
+        if not os.path.exists(op.join(outpath, 'events_dash')):
+            os.makedirs(op.join(outpath, 'events_dash'))
         
         self.width = {'bokeh': 800, 'dash': 800, 'mpl': 800}
 
@@ -120,9 +130,10 @@ class Plot():
 
     def bokeh(self):
         """Produces a bokeh interactive plot layout."""
-        fname = 'events_display_' + self.tag
+        fn = self.fname + '_bokeh'
         ext = '.html'
-        bp.output_file(self.savefig(fname) + ext)
+        out = op.join(self.outpath, fn)
+        bp.output_file(out + ext)
         lay = layout(self._create_layout('bokeh'))
         bp.save(lay)
 
@@ -132,7 +143,16 @@ class Plot():
 
     def dash(self):
         """Produces a dash interactive plot layout."""
-        self._create_layout('dash')
+        app = Dash("my_dash")
+        fn = self.fname
+        ext = '.html'
+
+        out = op.join(self.outpath, 'events_dash', fn)
+        lay = self._create_layout('dash')
+        for il,l in tqdm(enumerate(lay)):
+            plotly.offline.plot(
+                l,
+                filename=out + '_ev' + str(self.evid[il]) + ext)
 
     def _data_single_event(self, evid):
         """Access single event data"""
@@ -165,11 +185,12 @@ class Plot():
 
             lc_manip, sh_manip = self._data_manip_single_event(idat)
             lc_source, sh_source = self._preprocess(idat, lib)
-                                                   
-            for vk,vv in self.vpairs.items():
-                if lib == 'bokeh':
-                    popt = dict(ev=self.evid[idat], avars=vk, labels=vv)
 
+            # one plot per variable pair
+            for vk,vv in self.vpairs.items():
+                popt = dict(ev=self.evid[idat], avars=vk, labels=vv)
+                
+                if lib == 'bokeh':
                     p = self._single_bokeh_plot(lc_source, sh_source, **popt)
                     self._add_vertical_line(fig=p, data=sh_manip, avars=vk, lib=lib)
 
@@ -179,9 +200,10 @@ class Plot():
                     
                     p_lo = self._single_bokeh_subplot(p, lc_manip, sh_manip, **popt)
                     slider = self._single_bokeh_slider(lc_source, sh_source)
-                    
+
                 elif lib == 'dash':
-                    p = self._single_dash_plot()
+                    continue
+                    
                 elif lib == 'mpl':
                     p = self._single_mpl_plot()
 
@@ -189,6 +211,11 @@ class Plot():
                 if lib == 'bokeh':
                     row_lo.append(p_lo)
 
+            # general plots
+            if lib == 'dash':
+                row_hi = self._single_dash_plot(lc_source, sh_source, **popt)
+
+            # finalize plot layout
             if lib == 'bokeh':
                 lay.append(slider)
             lay.append(row_hi)
@@ -290,9 +317,27 @@ class Plot():
 
         return p
 
+    def _single_dash_plot(self, lc_source, sh_source, ev, avars, labels):
+        p = px.scatter_3d(lc_source, x='x', y='y', z='z', color='c',
+                          size='size', hover_data=['R'])
 
-    def _single_dash_plot(self):
-        raise NotImplementedError()
+    #     def scatter3D(value):
+    # data=[dict(
+    #         x=df['x'],
+    #         y=df['y'],
+    #         z=df['z'],
+    #         mode='markers',
+    #         type='scatter3d',
+    #         text=None,
+    #         marker=dict(
+    #             size=12,
+    #             opacity=0.8
+    #             )
+    #         )
+    #     ]
+
+        return p
+
 
     def _single_mpl_plot(self):
         raise NotImplementedError()
@@ -329,7 +374,7 @@ class DisplayEvent():
 
         p = Plot(outpath, lc_data, sh_data, [x for x in range(nplots)], tag)
         p.bokeh()
-        # p.dash()
+        p.dash()
         
     def _calculate_radius(self, x, y):
         return [np.sqrt(a**2 + b**2) for a,b in zip(x,y)]
