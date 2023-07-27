@@ -22,6 +22,7 @@ from bokeh import plotting as bp
 from dash import Dash, dcc, html, Input, Output
 import plotly
 import plotly.express as px
+from plotly import subplots as sp
 import dash_bootstrap_components as dbc
 
 class DatumManip():
@@ -83,14 +84,11 @@ class Plot():
 
         self.outpath = outpath
         self.fname = 'events_display_' + tag
-        
-        self.vpairs = {('x', 'y'): ('x [cm]', 'y [cm]'),
-                       ('z', 'R'): ('z [cm]', 'R [cm]'),
-                       ('z', 'x'): ('z [cm]', 'x [cm]'),
-                       ('z', 'y'): ('z [cm]', 'y [cm]'),
-                       # ('L', 'R'): ('Layer', 'R [cm]'),
-                       # ('L', 'x'): ('Layer', 'x [cm]'),
-                       # ('L', 'y'): ('Layer', 'y [cm]'),
+
+        self.vlabels = {'x': 'x [cm]', 'y': 'y [cm]', 'z': 'z [cm]',
+                        'R': 'R [cm]', 'L': 'Layer'}
+        self.vpairs = {('x', 'y'), ('z', 'R'), ('z', 'x'), ('z', 'y'),
+                       # ('L', 'R'), ('L', 'x'), ('L', 'y'),
                        }
 
         self.opt_line_z = dict(x=[364.5, 364.5], color='gray', line_dash='dashed')
@@ -137,6 +135,10 @@ class Plot():
         lay = layout(self._create_layout('bokeh'))
         bp.save(lay)
 
+    def _build_labels_pair(self, var_pair):
+        """Transform a variable pair into their labels."""
+        return (self.vlabels[var_pair[0]], self.vlabels[var_pair[1]])
+         
     def _check_dims(self):
         assert len(self.lc) == len(self.evid)
         assert len(self.sh) == len(self.evid)
@@ -147,12 +149,42 @@ class Plot():
         fn = self.fname
         ext = '.html'
 
-        out = op.join(self.outpath, 'events_dash', fn)
+        #out = op.join(self.outpath, 'events_dash', fn)
+        out = op.join(self.outpath, fn)
+
         lay = self._create_layout('dash')
-        for il,l in tqdm(enumerate(lay)):
-            plotly.offline.plot(
-                l,
-                filename=out + '_ev' + str(self.evid[il]) + ext)
+        nrows = len(lay)
+        sp_titles = ['Event #{}'.format(ev) for ev in self.evid]
+        fig = sp.make_subplots(rows=nrows, cols=1,
+                               specs=[[{'type': 'scene'}]]*nrows,
+                               subplot_titles=sp_titles,
+                               horizontal_spacing = 0.05, vertical_spacing = 0.01,
+                               )
+
+        for il,l in enumerate(lay):
+            fig.add_trace(l, row=il+1, col=1)
+
+        scene_def = dict(xaxis_title=self.vlabels['z'],
+                         yaxis_title=self.vlabels['y'],
+                         zaxis_title=self.vlabels['x'])
+        scenes = {'scene' + str(n+1): scene_def for n in range(nrows)}
+        scenes.update({'scene' + str(n+1) + '_aspectmode' : 'data' for n in range(nrows)})
+        fig.update_layout(
+            template="plotly_white",
+            autosize=False,
+            width=1500,
+            height=2500,
+            margin=dict(l=0,r=0,b=20,t=40,pad=0),
+            paper_bgcolor="white",
+            font_family="Courier New",
+            font_color="black",
+            title_font_family="Times New Roman",
+            title_font_color="blue",
+            legend_title_font_color="black",
+            **scenes
+        )
+
+        plotly.offline.plot(fig, filename=out+ext, auto_open=False)
 
     def _data_single_event(self, evid):
         """Access single event data"""
@@ -178,6 +210,9 @@ class Plot():
         fig.outline_line_color = None
 
     def _create_layout(self, lib):
+        """
+        Creates list with single plots representing the layout on the browser.
+        """
         lay = []
 
         for idat in self.evid: # loop per event
@@ -187,14 +222,14 @@ class Plot():
             lc_source, sh_source = self._preprocess(idat, lib)
 
             # one plot per variable pair
-            for vk,vv in self.vpairs.items():
-                popt = dict(ev=self.evid[idat], avars=vk, labels=vv)
+            for vp in self.vpairs:
+                popt = dict(ev=self.evid[idat], avars=vp, labels=self._build_labels_pair(vp))
                 
                 if lib == 'bokeh':
                     p = self._single_bokeh_plot(lc_source, sh_source, **popt)
-                    self._add_vertical_line(fig=p, data=sh_manip, avars=vk, lib=lib)
+                    self._add_vertical_line(fig=p, data=sh_manip, avars=vp, lib=lib)
 
-                    zoomx, zoomy = self._zoom_ranges(sh_manip, avars=vk, gapx=0.03, gapy=0.1)
+                    zoomx, zoomy = self._zoom_ranges(sh_manip, avars=vp, gapx=0.03, gapy=0.1)
                     p.x_range = bm.Range1d(zoomx[0], zoomx[1])
                     p.y_range = bm.Range1d(zoomy[0], zoomy[1])
                     
@@ -250,8 +285,8 @@ class Plot():
             lc_source = bm.ColumnDataSource(data=lc_source)
             sh_source = bm.ColumnDataSource(data=sh_source)
         elif lib == 'dash':
-            lc_source = pd.DataFrame(lc_source)
-            sh_source = pd.DataFrame(sh_source)
+            lc_source = lc_source
+            sh_source = sh_source
         elif lib == 'mpl':
             raise NotImplementedError()
 
@@ -318,24 +353,12 @@ class Plot():
         return p
 
     def _single_dash_plot(self, lc_source, sh_source, ev, avars, labels):
-        p = px.scatter_3d(lc_source, x='x', y='y', z='z', color='c',
-                          size='size', hover_data=['R'])
-
-    #     def scatter3D(value):
-    # data=[dict(
-    #         x=df['x'],
-    #         y=df['y'],
-    #         z=df['z'],
-    #         mode='markers',
-    #         type='scatter3d',
-    #         text=None,
-    #         marker=dict(
-    #             size=12,
-    #             opacity=0.8
-    #             )
-    #         )
-    #     ]
-
+        p = plotly.graph_objects.Scatter3d(x=lc_source['z'], y=lc_source['y'], z=lc_source['x'],
+                                           mode='markers',
+                                           marker=dict(size=lc_source['size'],
+                                                       color=lc_source['c'],
+                                                       opacity=1.)
+                                           )
         return p
 
 
