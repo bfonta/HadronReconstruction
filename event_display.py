@@ -97,7 +97,7 @@ class Plot():
         if not os.path.exists(op.join(outpath, 'events_dash')):
             os.makedirs(op.join(outpath, 'events_dash'))
         
-        self.width = {'bokeh': 800, 'dash': 800, 'mpl': 800}
+        self.width = {'bokeh': 800, 'dash': 2000, 'mpl': 800}
 
     def _add_vertical_line(self, fig, data, avars, lib):
         assert lib in self.libraries
@@ -146,7 +146,7 @@ class Plot():
     def dash(self):
         """Produces a dash interactive plot layout."""
         app = Dash("my_dash")
-        fn = self.fname
+        fn = self.fname + '_dash'
         ext = '.html'
 
         #out = op.join(self.outpath, 'events_dash', fn)
@@ -169,11 +169,18 @@ class Plot():
                          zaxis_title=self.vlabels['x'])
         scenes = {'scene' + str(n+1): scene_def for n in range(nrows)}
         scenes.update({'scene' + str(n+1) + '_aspectmode' : 'data' for n in range(nrows)})
+
+        # camera initial position
+        camera = dict(up=dict(x=0, y=0, z=1.), #camera tilt
+                      center=dict(x=0, y=0, z=0.), #focal point
+                      eye=dict(x=-2., y=-1., z=0.1))
+        scenes.update({'scene' + str(n+1) + '_camera' : camera for n in range(nrows)})
+
         fig.update_layout(
             template="plotly_white",
             autosize=False,
-            width=1500,
-            height=2500,
+            width=self.width['dash'],
+            height=3000,
             margin=dict(l=0,r=0,b=20,t=40,pad=0),
             paper_bgcolor="white",
             font_family="Courier New",
@@ -197,6 +204,7 @@ class Plot():
         return DatumManip(lc_datum, tracksters=True), DatumManip(sh_datum)     
 
     def mpl(self):
+        # fn = self.fname + '_mpl'
         NotImplementedError()
 
     def _common_bokeh_attributes(self, fig):
