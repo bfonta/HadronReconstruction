@@ -339,9 +339,12 @@ def explore_single_gun(args):
     infiles = (op.join(base, "SinglePion_0PU_10En200_11Jul/step3/step3_1.root"),
                #op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root")
                )
-    tags = ('clue3d',) #('clue3d', 'linking')
-    for inf,tag in zip(infiles,tags):
-        hacc = AccumulateHistos(tree, inf, tag="single_"+tag)    
+    labels = ('clue3d',) #('clue3d', 'linking')
+    for inf,_label in zip(infiles,labels):
+        label = "stats_single_gun_" + _label
+        if args.tag:
+            label += '_' + args.tag
+        hacc = AccumulateHistos(tree, inf, label)
         title = "Single π, {} events".format(hacc.nevents)
         opt = dict(title=title)
 
@@ -356,7 +359,7 @@ def explore_single_gun(args):
         #                   xlabel=xlabels[avar], out=savef("single_"+avar+"_both"), **opt)
     
         # bokeh
-        output_file(savef('single_bokeh_'+tag)+'.html')
+        output_file(savef(label)+'.html')
         gen_row = []
         for avar in avars:
             opt = dict(legs=[''])
@@ -438,7 +441,7 @@ def explore_single_gun(args):
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Data exploration of single pion gun.')
-    parser.add_argument('--tag', default='default',
+    parser.add_argument('--tag', default='',
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
     FLAGS = parser.parse_args()
     
