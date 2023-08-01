@@ -38,13 +38,15 @@ def histedges_equalN(x, nbins):
 class AccumulateHistos():
     def __init__(self, tree, infiles, tag):
         self.nevents = 0
-        self.nbins = 50
+        self.nbins = 60
         self.types = ('hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
                       'hfrac_trks', 'hfrac_trks_sel',
                       'hfrac_em_had', 'hresp')
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
 
+        self.ceh_thresh = 0.90
+        
         if op.isdir(self.adir) and len(os.listdir(self.adir)) == len(self.types):
             print('Loading histograms with tag {}...'.format(tag))
             self._load()
@@ -90,7 +92,7 @@ class AccumulateHistos():
         for k in self.hfrac_trks_sel.keys():
             self.hfrac_trks_sel[k].fill(frac = frac_trks(k, sel=True))
 
-        def frac_ceh():
+        def frac_ceh(thresh):
             """Computes several ratios related to energy deposited in CEE and CEH."""
             num_ceh = ak.sum(data.cluster2d_energy[data.cluster2d_layer > 26], axis=1)
             num_cee = ak.sum(data.cluster2d_energy[data.cluster2d_layer <= 26], axis=1)
@@ -98,21 +100,22 @@ class AccumulateHistos():
             den_gen = ak.ravel(data.gunparticle_energy)
             frac_ceh = num_ceh/den
             frac_cee = num_cee/den
-            thresh = 0.91
-
+            missing = (den_gen - num_cee - num_ceh) / den_gen
+            
             num_resp_ceh = ak.sum(data.cluster2d_energy[frac_ceh>thresh], axis=1)
             den_resp_ceh = ak.ravel(data.gunparticle_energy[frac_ceh>thresh])
             
-            num_resp_cee = ak.sum(data.cluster2d_energy[frac_cee<thresh], axis=1)
-            den_resp_cee = ak.ravel(data.gunparticle_energy[frac_cee<thresh])
+            num_resp_cee = ak.sum(data.cluster2d_energy[frac_cee<=thresh], axis=1)
+            den_resp_cee = ak.ravel(data.gunparticle_energy[frac_cee<=thresh])
             
-            return (frac_ceh, frac_cee, num_ceh/den_gen, num_cee/den_gen,
+            return (frac_ceh, frac_cee, num_ceh/den_gen, num_cee/den_gen, missing,
                     (den/den_gen)-1, (num_resp_ceh/den_resp_ceh)-1, (num_resp_cee/den_resp_cee)-1)
 
-        fceh = frac_ceh()
-        self.hfrac_em_had.fill(frac_ceh=fceh[0], frac_cee=fceh[1], frac_ceh_gen=fceh[2], frac_cee_gen=fceh[3])
+        fceh = frac_ceh(thresh=self.ceh_thresh)
+        self.hfrac_em_had.fill(frac_ceh=fceh[0], frac_cee=fceh[1],
+                               frac_ceh_gen=fceh[2], frac_cee_gen=fceh[3], frac_miss_gen=fceh[4])
         for ik,k in enumerate(self.hresp.keys()):
-            self.hresp[k].fill(resp=fceh[ik+4])
+            self.hresp[k].fill(resp=fceh[ik+5])
             
     def _load(self):
         for t in self.types:
@@ -158,10 +161,11 @@ class AccumulateHistos():
         self.hfrac_trks_sel = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")) for k in frac_trks_keys}
         
         self.hfrac_em_had = hist.Hist(
-            hist.axis.Regular(self.nbins, 0.,  1., name="frac_ceh"),
-            hist.axis.Regular(self.nbins, 0.,  1., name="frac_cee"),
-            hist.axis.Regular(self.nbins, 0.,  1., name="frac_ceh_gen"),
-            hist.axis.Regular(self.nbins, 0.,  1., name="frac_cee_gen"),
+            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_ceh"),
+            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_cee"),
+            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_ceh_gen"),
+            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_cee_gen"),
+            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_miss_gen"),
         )
         self.hresp = {k:hist.Hist(hist.axis.Regular(self.nbins, -1, 0.5, name="resp")) for k in ('full', 'cee', 'ceh')}
         
@@ -187,7 +191,7 @@ class AccumulateHistos():
         
 def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
                ylabel=None, ylog=False, density=False, frac=False,
-               mode='step', xerr=False, yerr=False):
+               mode='step', xerr=False, yerr=False, text=False, zlog=''):
     """Plot using the Bokeh package"""
     if ylog is True and density is True:
         raise RuntimeError('Currently ylog and density cannot be used simultaneously.')
@@ -207,7 +211,7 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
         if mode == '2d':
             xbins  = np.array([x for x in h.axes[0].centers for _ in range(len(h.axes[1].centers))])
             wbins  = np.array([x for x in (h.axes[0].edges[1:] - h.axes[0].edges[:-1]) for _ in range(len(h.axes[1].centers))])
-            xtextbins  = np.array([x-w/3 for x,w in zip(h.axes[0].centers,wbins) for _ in range(len(h.axes[1].centers))])
+            xtextbins = np.array([x-w/3 for x,w in zip(h.axes[0].centers,wbins) for _ in range(len(h.axes[1].centers))])
             ybins  = ak.concatenate([h.axes[1].centers for _ in range(len(h.axes[0].centers))]).to_numpy()
             hbins  = ak.concatenate([(h.axes[1].edges[1:] - h.axes[1].edges[:-1]) for _ in range(len(h.axes[1].centers))]).to_numpy()
             vals   = np.nan_to_num(np.round(ak.ravel(h.values()).to_numpy(),2), nan=0.)
@@ -230,7 +234,7 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
             source = bm.ColumnDataSource(data=dict(y=hvals, x=hcenters, xup=herrup, xdown=herrdown))
             
         glyph_opt = dict(y='y', x='x', source=source)
-        if len(legs)>1:
+        if len(legs)>0 and legs[0]!='':
             glyph_opt.update({'legend_label': l})
 
         if mode == 'step':
@@ -260,13 +264,14 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
             r = p.rect(x='xbins', y='ybins', width='width', height='height', source=source,
                        color=cmap, line_width=2, line_color='black')
             color_bar = r.construct_color_bar(padding=0, ticker=p.yaxis.ticker, formatter=p.yaxis.formatter)
-            color_bar.title="Average number of tracksters"
+            color_bar.title=zlog
             color_bar.title_text_align="center"
             color_bar.title_text_font_size = '10pt'
             p.add_layout(color_bar, 'right')
 
-            text = bm.Text(x="xtext", y="ybins", text="vals", angle=0.0, text_color="black", text_font_size="9pt")
-            p.add_glyph(source, text)
+            if text:
+                text = bm.Text(x="xtext", y="ybins", text="vals", angle=0.0, text_color="black", text_font_size="9pt")
+                p.add_glyph(source, text)
 
     p.output_backend = 'svg'
     p.toolbar.logo = None
@@ -385,7 +390,18 @@ def explore_single_gun(args):
         p = plot_bokeh([hacc.hfrac_em_had.project("frac_cee"), hacc.hfrac_em_had.project("frac_cee_gen")],
                        density=True, xlabel="Fraction", **opt)
         fracs_row.append(p)
-        opt = dict(legs=['Full', 'CEH', 'CEE'], legloc="top_right", title=title)
+        opt = dict(legs=['Missed energy fraction with respect to Gen. Energy',],
+                   legloc="top_right", title=title)
+        p = plot_bokeh([hacc.hfrac_em_had.project("frac_miss_gen"),],
+                       density=True, xlabel="Fraction", **opt)
+        fracs_row.append(p)
+        opt = dict(legs=[''], ylabel="Missed energy fraction", xlabel="Hadronic energy fraction",
+                   zlog='Number of events')
+        p = plot_bokeh(hacc.hfrac_em_had.project("frac_ceh", "frac_miss_gen")[::3j,::3j],
+                       title=title, mode='2d', **opt)
+        fracs_row.append(p)
+        opt = dict(legs=['Full', 'CEH > {}'.format(hacc.ceh_thresh), 'CEH < {}'.format(hacc.ceh_thresh)],
+                   legloc="top_right", title=title)
         p = plot_bokeh([x.project("resp") for x in hacc.hresp.values()],
                        density=True, xlabel="Layer Clusters' Response", **opt)
         respmax = max(hacc.hresp['full'].project("resp").density())
@@ -423,7 +439,7 @@ def explore_single_gun(args):
             ntrackster_2d_split_row.append(p)
 
         ntrackster_2d_row = []
-        opt = dict(legs=[''])
+        opt = dict(legs=[''], text=True, zlog="Average number of tracksters")
         for ivar in ("en", "pt"):
             for jvar in ("eta", "phi"):
                 p = plot_bokeh(hacc.hntrackster_2d.project(jvar, ivar, "n").profile("n"),
