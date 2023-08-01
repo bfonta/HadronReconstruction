@@ -220,6 +220,7 @@ class Plot():
         fig.ygrid.grid_line_dash = [6, 4]
         fig.xgrid.grid_line_color = None
         fig.outline_line_color = None
+        fig.toolbar.active_scroll = fig.select_one(bm.WheelZoomTool)
 
     def _create_layout(self, lib):
         """
@@ -286,11 +287,10 @@ class Plot():
         lc_colors = np.array(lc_colors)
             
         sf = 3
-        
         lc_source = dict(x=lc_manip.x, y=lc_manip.y, z=lc_manip.z, R=lc_manip.R, L=lc_manip.L,
-                         size=sf*lc_manip.e, size_init=np.copy(sf*lc_manip.e), c=lc_colors)
+                         e=lc_manip.e, size=sf*lc_manip.e, size_init=np.copy(sf*lc_manip.e), c=lc_colors)
         sh_source = dict(x=sh_manip.x, y=sh_manip.y, z=sh_manip.z, R=sh_manip.R, L=sh_manip.L,
-                         size=2*sf*sh_manip.e, size_init=np.copy(2*sf*sh_manip.e),
+                         e=sh_manip.e, size=2*sf*sh_manip.e, size_init=np.copy(2*sf*sh_manip.e),
                          c=[self.colors[k] for k in sh_manip.c])
 
         if lib == 'bokeh':
@@ -305,9 +305,13 @@ class Plot():
         return lc_source, sh_source
 
     def _single_bokeh_plot(self, lc_source, sh_source, ev, avars, labels):
+        tooltips = [("Energy [GeV]", "@e"),
+                    ("(x, y, z) [cm]", "(@x, @y, @z)"),
+                    ("R [cm], Layer", "@R, @L")]
         p = bp.figure(height=500, width=self.width['bokeh'], background_fill_color="white",
                       title="Event {} | {} vs. {}".format(ev, avars[0], avars[1]),
-                      tools="pan,save,box_select,box_zoom,wheel_zoom,reset,undo,redo")
+                      tools="pan,save,box_select,box_zoom,wheel_zoom,reset,undo,redo,hover",
+                      tooltips=tooltips)
         p.circle(x=avars[0], y=avars[1], color='c', size='size', source=lc_source, legend_label="LCs")
         p.circle(x=avars[0], y=avars[1], color='c', size='size', alpha=0.3, source=sh_source, legend_label="SimHits")
 
