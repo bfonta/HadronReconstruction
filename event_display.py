@@ -22,6 +22,7 @@ from bokeh import plotting as bp
 from dash import Dash, dcc, html, Input, Output
 import plotly
 import plotly.express as px
+import plotly.graph_objects as go
 from plotly import subplots as sp
 import dash_bootstrap_components as dbc
 
@@ -162,7 +163,9 @@ class Plot():
                                )
 
         for il,l in enumerate(lay):
-            fig.add_trace(l, row=il+1, col=1)
+            trace_opt = dict(row=il+1, col=1)
+            fig.add_trace(l[0], **trace_opt)
+            fig.add_trace(l[1], **trace_opt)
 
         scene_def = dict(xaxis_title=self.vlabels['z'],
                          yaxis_title=self.vlabels['y'],
@@ -177,6 +180,7 @@ class Plot():
         scenes.update({'scene' + str(n+1) + '_camera' : camera for n in range(nrows)})
 
         fig.update_layout(
+            showlegend=True,
             template="plotly_white",
             autosize=False,
             width=self.width['dash'],
@@ -361,13 +365,17 @@ class Plot():
         return p
 
     def _single_dash_plot(self, lc_source, sh_source, ev, avars, labels):
-        p = plotly.graph_objects.Scatter3d(x=lc_source['z'], y=lc_source['y'], z=lc_source['x'],
-                                           mode='markers',
-                                           marker=dict(size=lc_source['size'],
-                                                       color=lc_source['c'],
-                                                       opacity=1.)
-                                           )
-        return p
+        p_lc = go.Scatter3d(x=lc_source['z'], y=lc_source['y'], z=lc_source['x'],
+                            mode='markers', name='LCs (event #{})'.format(ev),
+                            marker=dict(size=lc_source['size'],
+                                        color=lc_source['c'],
+                                        opacity=1.))
+        p_sh = go.Scatter3d(x=sh_source['z'], y=sh_source['y'], z=sh_source['x'],
+                            mode='markers', name='SimHits (event #{})'.format(ev),
+                            marker=dict(size=sh_source['size'],
+                                        color=sh_source['c'],
+                                        opacity=1.))
+        return p_lc, p_sh
 
 
     def _single_mpl_plot(self):
