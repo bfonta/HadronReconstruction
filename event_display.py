@@ -247,7 +247,8 @@ class Plot():
                     p.y_range = bm.Range1d(zoomy[0], zoomy[1])
                     
                     p_lo = self._single_bokeh_subplot(p, lc_manip, sh_manip, **popt)
-                    slider = self._single_bokeh_slider(lc_source, sh_source)
+                    slider_lc = self._single_bokeh_slider(lc_source, title='Layer Clusters size')
+                    slider_sh = self._single_bokeh_slider(sh_source, title='SimHits size')
 
                 elif lib == 'dash':
                     continue
@@ -265,7 +266,7 @@ class Plot():
 
             # finalize plot layout
             if lib == 'bokeh':
-                lay.append(slider)
+                lay.append([slider_lc, slider_sh])
             lay.append(row_hi)
             if lib == 'bokeh':
                 lay.append(row_lo)
@@ -326,21 +327,17 @@ class Plot():
         #p.xaxis.major_label_text_font_size = '0pt'
         return p
 
-    def _single_bokeh_slider(self, lc_source, sh_source):
+    def _single_bokeh_slider(self, source, title='', value=1., start=0.1, end=10., step=0.1):
         """Creates slider to control widget size."""
-        slider = bm.Slider(title='Layer Cluster size', value=1., start=0.1, end=10., step=0.1, width=self.width['bokeh'])
-        callback = bm.CustomJS(args=dict(s1=lc_source, s2=sh_source), code="""
+        slider = bm.Slider(title=title, value=value, start=start, end=end, step=step,
+                           width=int(self.width['bokeh']/2))
+        callback = bm.CustomJS(args=dict(s=source), code="""
         var val = cb_obj.value;
-        var data1 = s1.data;
-        var data2 = s2.data;
-        for (var i=0; i<data1.size_init.length; i++) {
-        data1.size[i] = val * data1.size_init[i];
+        var data = s.data;
+        for (var i=0; i<data.size_init.length; i++) {
+        data.size[i] = val * data.size_init[i];
         }
-        for (var i=0; i<data2.size_init.length; i++) {
-        data2.size[i] = val * data2.size_init[i];
-        }
-        s1.change.emit();
-        s2.change.emit();
+        s.change.emit();
         """)
         slider.js_on_change('value', callback)
         return slider
