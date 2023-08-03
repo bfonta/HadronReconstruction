@@ -36,15 +36,15 @@ def histedges_equalN(x, nbins):
                      np.sort(x))        
         
 class AccumulateHistos():
-    def __init__(self, tree, infiles, tag):
+    def __init__(self, tree, infiles, tag, intensive=False):
         self.nevents = 0
         self.nbins = 60
         self.types = ('hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
-                      'hfrac_trks', 'hfrac_trks_sel',
-                      'hfrac_em_had', 'hresp')
+                      'hfrac_trks_mult', 'hfrac_trks_sel', 'hfrac_trks_ceh', 'hfrac_em_had', 'hresp')
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
 
+        self.last_cee_layer = 26
         self.ceh_thresh = 0.90
         
         if op.isdir(self.adir) and len(os.listdir(self.adir)) == len(self.types):
@@ -74,7 +74,7 @@ class AccumulateHistos():
                                  phi = ak.ravel(data.gunparticle_phi),
                                  pt  = ak.ravel(data.gunparticle_pt))
 
-        def frac_trks(n, sel):
+        def frac_trks_multiplicity(n, sel):
             """
             Selects n highest-energy tracksters for each event.
             If `sel==True`, only considers events with >= n tracksters.
@@ -86,16 +86,19 @@ class AccumulateHistos():
             else: # does not mask
                 s = np.full_like(en_top_n, True, dtype=bool)
             return ak.sum(en_top_n[s], axis=1) / ak.sum(data.multiclus_energy[s], axis=1)
-                           
-        for k in self.hfrac_trks.keys():
-            self.hfrac_trks[k].fill(frac = frac_trks(k, sel=False))
+
+        if intensive:
+            self.fill_frac_trks_ceh_energy(data)
+        
+        for k in self.hfrac_trks_mult.keys():
+            self.hfrac_trks_mult[k].fill(frac = frac_trks_multiplicity(k, sel=False))
         for k in self.hfrac_trks_sel.keys():
-            self.hfrac_trks_sel[k].fill(frac = frac_trks(k, sel=True))
+            self.hfrac_trks_sel[k].fill(frac = frac_trks_multiplicity(k, sel=True))
 
         def frac_ceh(thresh):
             """Computes several ratios related to energy deposited in CEE and CEH."""
-            num_ceh = ak.sum(data.cluster2d_energy[data.cluster2d_layer > 26], axis=1)
-            num_cee = ak.sum(data.cluster2d_energy[data.cluster2d_layer <= 26], axis=1)
+            num_ceh = ak.sum(data.cluster2d_energy[data.cluster2d_layer > self.last_cee_layer], axis=1)
+            num_cee = ak.sum(data.cluster2d_energy[data.cluster2d_layer <= self.last_cee_layer], axis=1)
             den = ak.sum(data.cluster2d_energy, axis=1)
             den_gen = ak.ravel(data.gunparticle_energy)
             frac_ceh = num_ceh/den
@@ -123,6 +126,34 @@ class AccumulateHistos():
                 setattr(self, t, pickle.load(f))
 
         self.nevents = int(sum(self.hgen.project('en').counts()))
+
+    def fill_frac_trks_ceh_energy(self, data):
+        info = lambda evid, trkid, avar : getattr(data, 'cluster2d_' + avar)[evid, data.multiclus_cluster2d[evid][trkid]]
+
+        nevents = len(ak.count(data.multiclus_eta, axis=1))
+        for evid in range(nevents):
+            ntracksters = ak.count(data.multiclus_eta, axis=1)[evid]
+            for trkid in range(ntracksters):
+                lc_l = info(evid, trkid, 'layer')
+                lc_e = info(evid, trkid, 'energy')
+
+                en_ceh = ak.sum(lc_e[lc_l > self.last_cee_layer])
+                en_cee = ak.sum(lc_e[lc_l <= self.last_cee_layer])
+                f = en_ceh / (en_ceh + en_cee)
+                f_gen = en_ceh / ak.flatten(data.gunparticle_energy)[evid][0]
+                
+                self.hfrac_trks_ceh['full_en'].fill(frac=f, frac_gen=f_gen)
+                if en_ceh > 0 and en_cee > 0:
+                    self.hfrac_trks_ceh['split_en'].fill(frac=f, frac_gen=f_gen)
+
+                l_ceh = len(np.unique(lc_l[lc_l > self.last_cee_layer]))
+                l_cee = len(np.unique(ak.sum(lc_l[lc_l <= self.last_cee_layer])))
+                f = l_ceh / (l_ceh + l_cee)
+                
+                self.hfrac_trks_ceh['full_layer'].fill(frac=f, frac_gen=f)
+                if l_ceh > 0 and l_cee > 0:
+                    self.hfrac_trks_ceh['split_layer'].fill(frac=f, frac_gen=f)
+
 
     def _save(self, tree, infiles):
         ranges = {'en': (5., 205.), 'eta': (1.55, 2.85), 'phi': (-3.25, 3.25), 'pt': (0, 75)}
@@ -156,9 +187,16 @@ class AccumulateHistos():
         )
 
         nb = 80
+
+        if intensive:
+            self.hfrac_trks_ceh = {k:hist.Hist(
+                hist.axis.Regular(nb, -0.01, 1.01, name="frac"),
+                hist.axis.Regular(nb, -0.01, 1.01, name="frac_gen"),
+            ) for k in ('full_en', 'split_en', 'full_layer', 'split_layer')}
+
         frac_trks_keys = [1, 2, 5, 10]
-        self.hfrac_trks = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")) for k in frac_trks_keys}
-        self.hfrac_trks_sel = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02,  name="frac")) for k in frac_trks_keys}
+        self.hfrac_trks_mult = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02, name="frac")) for k in frac_trks_keys}
+        self.hfrac_trks_sel = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02, name="frac")) for k in frac_trks_keys}
         
         self.hfrac_em_had = hist.Hist(
             hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_ceh"),
@@ -414,7 +452,7 @@ def explore_single_gun(args):
         opt = dict(legs=['highest-energy trackster', '2 highest-energy tracksters',
                          '5 highest-energy tracksters', '10 highest-energy tracksters'],
                    legloc="top_left",  title=title)
-        p = plot_bokeh([x.project("frac") for x in hacc.hfrac_trks.values()], ylog=True,
+        p = plot_bokeh([x.project("frac") for x in hacc.hfrac_trks_mult.values()], ylog=True,
                        xlabel="Fraction of the total trackster energy in an event", **opt)
         ntrackster_row.append(p)
         p = plot_bokeh([x.project("frac") for x in hacc.hfrac_trks_sel.values()], density=True,
@@ -429,6 +467,25 @@ def explore_single_gun(args):
                        frac=True, **opt)
         ntrackster_row.append(p)
 
+        if args.intensive:
+            ntrackster_frac_row = []
+            opt = dict(legs=['Trackster energy fraction', 'Trackster energy fraction w/ respect to Gen'],
+                       legloc="bottom_left", title=title, ylog=True,)
+            p = plot_bokeh([hacc.hfrac_trks_ceh['full_en'].project(x) for x in ("frac", "frac_gen")], 
+                           xlabel="Fraction of the energy left by tracksters in the CEH", **opt)
+            ntrackster_frac_row.append(p)
+            opt = dict(legs=['Trackster energy fraction', 'Trackster energy fraction w/ respect to Gen'], legloc="top_right", title=title)
+            p = plot_bokeh([hacc.hfrac_trks_ceh['split_en'].project(x) for x in ("frac", "frac_gen")],
+                           xlabel="Fraction of the energy left by split tracksters in the CEH", **opt)
+            ntrackster_frac_row.append(p)
+            opt = dict(legs=['Trackster layer fraction'], legloc="top_left", title=title)
+            p = plot_bokeh([hacc.hfrac_trks_ceh['full_layer'].project("frac")], ylog=True,
+                           xlabel="Fraction of the layers by tracksters in the CEH", **opt)
+            ntrackster_frac_row.append(p)
+            p = plot_bokeh([hacc.hfrac_trks_ceh['split_layer'].project("frac")], ylog=True,
+                           xlabel="Fraction of the layers by split tracksters in the CEH", **opt)
+            ntrackster_frac_row.append(p)
+        
         ntrackster_2d_split_row = []
         opt = dict(legs=[''])
         for avar in avars:
@@ -451,8 +508,12 @@ def explore_single_gun(args):
                        mode='2d', **opt)
         ntrackster_2d_row.append(p)
 
-        lay = layout([gen_row, trackster_row, fracs_row,
-                      ntrackster_row, ntrackster_2d_split_row, ntrackster_2d_row])
+        lay = [gen_row, trackster_row, fracs_row,
+               ntrackster_frac_row,
+               ntrackster_2d_split_row, ntrackster_2d_row]
+        if args.trackster_fractions:
+            lay.append(ntrackster_row)
+        lay = layout(lay)
         save(lay)
     
 if __name__ == "__main__":
@@ -460,6 +521,7 @@ if __name__ == "__main__":
     parser.add_argument('--tag', default='',
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
     parser.add_argument('--dataset', default='SinglePion_0PU_10En200_11Jul', help='Dataset to use.')
+    parser.add_argument('--intensive', action="store_true", help='Run more time consuming trackster-related calculations.')
     FLAGS = parser.parse_args()
     
     explore_single_gun(FLAGS)
