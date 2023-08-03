@@ -341,7 +341,7 @@ def explore_single_gun(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = (op.join(base, "SinglePion_0PU_10En200_11Jul/step3/step3_1.root"),
+    infiles = (op.join(base, args.dataset, "step3/step3_1.root"),
                #op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root")
                )
     labels = ('clue3d',) #('clue3d', 'linking')
@@ -459,6 +459,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Data exploration of single pion gun.')
     parser.add_argument('--tag', default='',
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
+    parser.add_argument('--dataset', default='SinglePion_0PU_10En200_11Jul', help='Dataset to use.')
     FLAGS = parser.parse_args()
     
     explore_single_gun(FLAGS)

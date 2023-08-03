@@ -464,17 +464,21 @@ def event_display(args):
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
-    infiles = (op.join(base, "SinglePion_0PU_10En200_11Jul/step3/step3_1.root"),
+    infiles = (op.join(base, args.dataset, "step3/step3_1.root"),
                #op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root")
                )
     tags = ('clue3d',) #('clue3d', 'linking')
-    for inf,tag in zip(infiles,tags):
-        de = DisplayEvent(tree, inf, outpath=outpath, tag="single_" + tag)
+    for inf,atag in zip(infiles,tags):
+        fulltag = "single_" + atag
+        if args.tag != '':
+            fulltag +=  '_' + args.tag
+        de = DisplayEvent(tree, inf, outpath=outpath, tag=fulltag)
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Data exploration of single pion gun.')
-    parser.add_argument('--tag', default='default',
+    parser.add_argument('--tag', default='',
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
+    parser.add_argument('--dataset', default='SinglePion_0PU_10En200_11Jul', help='Dataset to use.')
     FLAGS = parser.parse_args()
 
     event_display(FLAGS)
