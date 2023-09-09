@@ -39,8 +39,10 @@ class AccumulateHistos():
     def __init__(self, tree, infiles, tag, intensive=False):
         self.nevents = 0
         self.nbins = 60
+        self.intensive = intensive
         self.types = ('hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
-                      'hfrac_trks_mult', 'hfrac_trks_sel', 'hfrac_trks_ceh', 'hfrac_em_had', 'hresp')
+                      'hfrac_trks_mult', 'hfrac_trks_sel', 'hfrac_trks_ceh', 'hfrac_em_had', 'hresp',
+                      'bad_lcs', 'good_lcs')
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
 
@@ -87,8 +89,9 @@ class AccumulateHistos():
                 s = np.full_like(en_top_n, True, dtype=bool)
             return ak.sum(en_top_n[s], axis=1) / ak.sum(data.multiclus_energy[s], axis=1)
 
-        if intensive:
+        if self.intensive:
             self.fill_frac_trks_ceh_energy(data)
+            self.fill_lone_layer_clusters(data)
         
         for k in self.hfrac_trks_mult.keys():
             self.hfrac_trks_mult[k].fill(frac = frac_trks_multiplicity(k, sel=False))
@@ -133,6 +136,7 @@ class AccumulateHistos():
         nevents = len(ak.count(data.multiclus_eta, axis=1))
         for evid in range(nevents):
             ntracksters = ak.count(data.multiclus_eta, axis=1)[evid]
+
             for trkid in range(ntracksters):
                 lc_l = info(evid, trkid, 'layer')
                 lc_e = info(evid, trkid, 'energy')
@@ -154,9 +158,42 @@ class AccumulateHistos():
                 if l_ceh > 0 and l_cee > 0:
                     self.hfrac_trks_ceh['split_layer'].fill(frac=f, frac_gen=f)
 
+    def fill_lone_layer_clusters(self, data):
+        """Study LCs whcih were not associated to a trackster."""
+        info = lambda evid, mask, avar : data['cluster2d_' + avar][evid, mask]
+
+        nevents = len(ak.count(data.multiclus_eta, axis=1))
+        for evid in range(nevents):
+            good_lc_idx = ak.ravel(data.multiclus_cluster2d[evid])
+            mask = np.ones(len(data.cluster2d_energy[evid]), bool)
+            mask[good_lc_idx] = 0
+            mask_inv = np.zeros(len(data.cluster2d_energy[evid]), bool)
+            mask_inv[good_lc_idx] = 1
+            
+            bad_lc_en = info(evid, mask, 'energy')
+            bad_lc_eta = info(evid, mask, 'eta')
+            bad_lc_phi = info(evid, mask, 'phi')
+            bad_lc_pt = info(evid, mask, 'pt')
+            for lcid in range(len(bad_lc_en)):
+                self.bad_lcs.fill(en=bad_lc_en[lcid],
+                                  eta=bad_lc_eta[lcid],
+                                  phi=bad_lc_phi[lcid],
+                                  pt=bad_lc_pt[lcid])
+            
+            good_lc_en = info(evid, mask_inv, 'energy')
+            good_lc_eta = info(evid, mask_inv, 'eta')
+            good_lc_phi = info(evid, mask_inv, 'phi')
+            good_lc_pt = info(evid, mask_inv, 'pt')
+            for lcid in range(len(good_lc_en)):
+                self.good_lcs.fill(en=good_lc_en[lcid],
+                                   eta=good_lc_eta[lcid],
+                                   phi=good_lc_phi[lcid],
+                                   pt=good_lc_pt[lcid])
+
 
     def _save(self, tree, infiles):
-        ranges = {'en': (5., 205.), 'eta': (1.55, 2.85), 'phi': (-3.25, 3.25), 'pt': (0, 75)}
+        ranges = {'en': (5., 205.),    'eta': (1.55, 2.85),    'phi': (-3.25, 3.25),    'pt': (0, 75),
+                  'lc_en': (0., 20.), 'lc_eta': (1.55, 2.85), 'lc_phi': (-3.25, 3.25), 'lc_pt': (0, 15)}
         
         # gen variables
         self.hgen = hist.Hist(
@@ -188,7 +225,7 @@ class AccumulateHistos():
 
         nb = 80
 
-        if intensive:
+        if self.intensive:
             self.hfrac_trks_ceh = {k:hist.Hist(
                 hist.axis.Regular(nb, -0.01, 1.01, name="frac"),
                 hist.axis.Regular(nb, -0.01, 1.01, name="frac_gen"),
@@ -206,7 +243,20 @@ class AccumulateHistos():
             hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_miss_gen"),
         )
         self.hresp = {k:hist.Hist(hist.axis.Regular(self.nbins, -1, 0.5, name="resp")) for k in ('full', 'cee', 'ceh')}
-        
+
+        self.bad_lcs = hist.Hist(
+            hist.axis.Regular(self.nbins, ranges['lc_en'][0],  ranges['lc_en'][1],  name="en"),
+            hist.axis.Regular(self.nbins, ranges['lc_eta'][0], ranges['lc_eta'][1], name="eta"),
+            hist.axis.Regular(self.nbins, ranges['lc_phi'][0], ranges['lc_phi'][1], name="phi"),
+            hist.axis.Regular(self.nbins, ranges['lc_pt'][0],  ranges['lc_pt'][1],  name="pt"),
+        )
+        self.good_lcs = hist.Hist(
+            hist.axis.Regular(self.nbins, ranges['lc_en'][0],  ranges['lc_en'][1],  name="en"),
+            hist.axis.Regular(self.nbins, ranges['lc_eta'][0], ranges['lc_eta'][1], name="eta"),
+            hist.axis.Regular(self.nbins, ranges['lc_phi'][0], ranges['lc_phi'][1], name="phi"),
+            hist.axis.Regular(self.nbins, ranges['lc_pt'][0],  ranges['lc_pt'][1],  name="pt"),
+        )
+
         allvars = self._select_vars()
         for batch in tqdm(up.iterate(infiles + ":" + tree, 
                                      step_size=10000, library='ak',
@@ -387,7 +437,7 @@ def explore_single_gun(args):
         label = "stats_single_gun_" + _label
         if args.tag:
             label += '_' + args.tag
-        hacc = AccumulateHistos(tree, inf, label)
+        hacc = AccumulateHistos(tree, inf, label, args.intensive)
         title = "Single π, {} events".format(hacc.nevents)
         opt = dict(title=title)
 
@@ -486,6 +536,12 @@ def explore_single_gun(args):
                            xlabel="Fraction of the layers by split tracksters in the CEH", **opt)
             ntrackster_frac_row.append(p)
         
+            lcs_row = []
+            opt = dict(legs=['Bad LCs', 'Good LCs'], legloc="bottom_left", title=title, ylog=False,)
+            for avar in avars:
+                p = plot_bokeh([hacc.bad_lcs.project(avar), hacc.good_lcs.project(avar)], xlabel=xlabels[avar], **opt)
+                lcs_row.append(p)
+
         ntrackster_2d_split_row = []
         opt = dict(legs=[''])
         for avar in avars:
@@ -513,6 +569,7 @@ def explore_single_gun(args):
                ntrackster_2d_split_row, ntrackster_2d_row]
         if args.trackster_fractions:
             lay.append(ntrackster_row)
+            lay.append(lcs_row)
         lay = layout(lay)
         save(lay)
     

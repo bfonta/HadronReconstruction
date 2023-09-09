@@ -23,12 +23,13 @@ From experience, mamba and LCG are not compatible, so mixing both is not recomme
 
 * Usage
 ** Setup
+<<sec:setup>>
 The repository relies on CMSSW version ~CMSSW_12_6_0_pre4~:
 #+BEGIN_SRC shell
 cd CMSSW_12_6_0_pre4/src/Analysis;
 cmsenv;
 #+END_SRC
-To run the scripts one needs some ~python~ packages as described [[*Setup][here]]. Use =-h= or =--help= to inspect all script options.
+To run the scripts one needs some ~python~ packages as described [[sec:setup][here]]. Use =-h= or =--help= to inspect all script options.
 
 ** Generate 2D and 3D event displays
 #+BEGIN_SRC shell
