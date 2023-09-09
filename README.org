@@ -1,0 +1,44 @@
+* HadronReconstruction
+
+* Installation
+** Clone the repository
+#+BEGIN_SRC shell
+git clone git@github.com:bfonta/HadronReconstruction.git
+#+END_SRC
+
+** Install python dependencies
+I recommend [[https://mamba.readthedocs.io/en/latest/index.html][mamba]]. The following should work:
+
+#+BEGIN_SRC shell
+mamba create -n EnvName python3 bokeh dash uproot
+mamba activate EnvName
+#+END_SRC
+
+Alternatively, for ~lxplus~ users at CERN, one can use LCG. For instance:
+#+BEGIN_SRC shell
+source /cvmfs/sft.cern.ch/lcg/views/LCG_103/x86_64-centos7-gcc11-opt/setup.sh
+#+END_SRC
+
+From experience, mamba and LCG are not compatible, so mixing both is not recommended and might lead to version clashes.
+
+* Usage
+** Setup
+The repository relies on CMSSW version ~CMSSW_12_6_0_pre4~:
+#+BEGIN_SRC shell
+cd CMSSW_12_6_0_pre4/src/Analysis;
+cmsenv;
+#+END_SRC
+To run the scripts one needs some ~python~ packages as described [[*Setup][here]]. Use =-h= or =--help= to inspect all script options.
+
+** Generate 2D and 3D event displays
+#+BEGIN_SRC shell
+python event_display.py --dataset SinglePion_0PU_10En200_CEH_16Jul --tag CEHOnly
+#+END_SRC
+
+The plots are stored in the web ~eos/~ CERN service.
+
+** Plot sample statistics
+#+BEGIN_SRC shell
+python explore_single_gun.py --dataset SinglePion_0PU_10En200_CEH_16Jul --tag CEHOnly
+#+END_SRC
+
