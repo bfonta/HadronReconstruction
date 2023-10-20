@@ -1,6 +1,6 @@
 # Coding: utf-8
 
-_all_ = [ 'explore_single_gun' ]
+_all_ = [ 'analyse_single_gun' ]
 
 from tqdm import tqdm
 import argparse
@@ -25,6 +25,44 @@ import matplotlib; import matplotlib.pyplot as plt
 import mplhep as hep
 plt.style.use(hep.style.ROOT)
 
+class ScanParameters:
+    def __setitem__(self, key, value):
+        """Support item assignment"""
+        setattr(self, key, value)
+
+    def __getitem__(self, key):
+        """Support item assignment"""
+        return getattr(self, key)
+
+    def __init__(self, text_format=True, **kwargs):
+        """Initialize parameters to be scanned."""
+        
+        defaults = {
+            'critical_density'         : ('cdens', [0.4, 0.5, 0.6, 0.8, 1.0, 1.3, 1.7, 2.0, 2.5]),
+            'critical_etaphi_distance' : ('cdist', [0.01, 0.02, 0.025, 0.03, 0.05]),
+            'kernel_density_factor'    : ('kdens', [0.2])
+        }
+
+        # sets anything provided by the user
+        for key, val in kwargs.items():
+            self[key] = val
+
+        # defaults are used if not provided by the user
+        for par in defaults.keys():
+            if par not in kwargs.keys():
+                self[par] = defaults[par][1]
+
+        if text_format:
+            self._set_string_format(defaults)
+
+        # define aliases for user convenience
+        for key, val in defaults.items():
+            self[val[0]] = self[key]
+        
+    def _set_string_format(self, defaults):
+        for key in defaults:
+            self[key] = [str(x).replace('.', 'p').replace('-', 'm') for x in self[key]]
+            
 def histedges_equalN(x, nbins):
     """
     Define bin boundaries with the same numbers of events.
@@ -40,16 +78,22 @@ class AccumulateHistos():
         self.nevents = 0
         self.nbins = 60
         self.intensive = intensive
-        self.types = ('hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
-                      'hfrac_trks_mult', 'hfrac_trks_sel', 'hfrac_trks_ceh', 'hfrac_em_had', 'hresp',
-                      'bad_lcs', 'good_lcs')
+
+        _types = ['hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
+                  'hfrac_trks_mult', 'hfrac_trks_sel', 'hfrac_em_had', 'hresp',
+                  'bad_lcs', 'good_lcs']
+        _extratypes = ['hfrac_trks_ceh']
+        self.types = _types + _extratypes if self.intensive else _types
+        
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
 
         self.last_cee_layer = 26
         self.ceh_thresh = 0.90
-        
-        if op.isdir(self.adir) and len(os.listdir(self.adir)) == len(self.types):
+
+        did_intensive_run = op.isdir(self.adir) and ( (len(os.listdir(self.adir)) == len(self.types) and self.intensive) or
+                                                      (len(os.listdir(self.adir)) == len(_types) and not self.intensive) )
+        if did_intensive_run:
             print('Loading histograms with tag {}...'.format(tag))
             self._load()
         else:
@@ -113,7 +157,7 @@ class AccumulateHistos():
             
             num_resp_cee = ak.sum(data.cluster2d_energy[frac_cee<=thresh], axis=1)
             den_resp_cee = ak.ravel(data.gunparticle_energy[frac_cee<=thresh])
-            
+
             return (frac_ceh, frac_cee, num_ceh/den_gen, num_cee/den_gen, missing,
                     (den/den_gen)-1, (num_resp_ceh/den_resp_ceh)-1, (num_resp_cee/den_resp_cee)-1)
 
@@ -141,22 +185,23 @@ class AccumulateHistos():
                 lc_l = info(evid, trkid, 'layer')
                 lc_e = info(evid, trkid, 'energy')
 
-                en_ceh = ak.sum(lc_e[lc_l > self.last_cee_layer])
-                en_cee = ak.sum(lc_e[lc_l <= self.last_cee_layer])
-                f = en_ceh / (en_ceh + en_cee)
-                f_gen = en_ceh / ak.flatten(data.gunparticle_energy)[evid][0]
-                
-                self.hfrac_trks_ceh['full_en'].fill(frac=f, frac_gen=f_gen)
-                if en_ceh > 0 and en_cee > 0:
-                    self.hfrac_trks_ceh['split_en'].fill(frac=f, frac_gen=f_gen)
+                if self.intensive:
+                    en_ceh = ak.sum(lc_e[lc_l > self.last_cee_layer])
+                    en_cee = ak.sum(lc_e[lc_l <= self.last_cee_layer])
+                    f = en_ceh / (en_ceh + en_cee)
+                    f_gen = en_ceh / ak.flatten(data.gunparticle_energy)[evid][0]
 
-                l_ceh = len(np.unique(lc_l[lc_l > self.last_cee_layer]))
-                l_cee = len(np.unique(ak.sum(lc_l[lc_l <= self.last_cee_layer])))
-                f = l_ceh / (l_ceh + l_cee)
+                    self.hfrac_trks_ceh['full_en'].fill(frac=f, frac_gen=f_gen)
+                    if en_ceh > 0 and en_cee > 0:
+                        self.hfrac_trks_ceh['split_en'].fill(frac=f, frac_gen=f_gen)
+
+                        l_ceh = len(np.unique(lc_l[lc_l > self.last_cee_layer]))
+                        l_cee = len(np.unique(ak.sum(lc_l[lc_l <= self.last_cee_layer])))
+                        f = l_ceh / (l_ceh + l_cee)
                 
-                self.hfrac_trks_ceh['full_layer'].fill(frac=f, frac_gen=f)
-                if l_ceh > 0 and l_cee > 0:
-                    self.hfrac_trks_ceh['split_layer'].fill(frac=f, frac_gen=f)
+                        self.hfrac_trks_ceh['full_layer'].fill(frac=f, frac_gen=f)
+                        if l_ceh > 0 and l_cee > 0:
+                            self.hfrac_trks_ceh['split_layer'].fill(frac=f, frac_gen=f)
 
     def fill_lone_layer_clusters(self, data):
         """Study LCs whcih were not associated to a trackster."""
@@ -421,22 +466,11 @@ def plot_hist_mpl(hists, out, title, xlabel, legs, ylabel=None, ylog=False, dens
         plt.savefig(out + ext)
 
     plt.close()
-    
-def explore_single_gun(args):
-    """Data exploration."""
-    outpath = "/eos/user/b/bfontana/www/HadronReco"
-    savef = lambda x : op.join(outpath, x)
 
-    base = "/data_CMS/cms/alves"
-    tree = "ana/hgc"
-    infiles = (op.join(base, args.dataset, "step3/step3_1.root"),
-               #op.join(base, "SinglePion_0PU_10En200_30Jun/step3_linking/step3_*.root")
-               )
+def build_dashboard(infiles, args):
     labels = ('clue3d',) #('clue3d', 'linking')
     for inf,_label in zip(infiles,labels):
-        label = "stats_single_gun_" + _label
-        if args.tag:
-            label += '_' + args.tag
+        label = "stats_single_gun_" + _label + '_' + args.tag
         hacc = AccumulateHistos(tree, inf, label, args.intensive)
         title = "Single π, {} events".format(hacc.nevents)
         opt = dict(title=title)
@@ -445,14 +479,8 @@ def explore_single_gun(args):
         xlabels      = {'en': "Energy [GeV]", 'eta': "|η|", 'phi': "ϕ", 'pt': 'pT [GeV]'}
         xlabels_diff = {'en': "ΔE [GeV]", 'eta': "Δη", 'phi': "Δϕ", 'pt': 'ΔpT [GeV]'}
 
-        # matplotlib
-        # for avar in avars:
-        #     opt = dict(legs=[''] if nd==1 else distances, title=title)
-        #     plot_hist_mpl(hacc.hgen.project(avar),
-        #                   xlabel=xlabels[avar], out=savef("single_"+avar+"_both"), **opt)
-    
         # bokeh
-        output_file(savef(label)+'.html')
+        output_file(op.join(args.outpath, label)+'.html')
         gen_row = []
         for avar in avars:
             opt = dict(legs=[''])
@@ -488,7 +516,7 @@ def explore_single_gun(args):
         p = plot_bokeh(hacc.hfrac_em_had.project("frac_ceh", "frac_miss_gen")[::3j,::3j],
                        title=title, mode='2d', **opt)
         fracs_row.append(p)
-        opt = dict(legs=['Full', 'CEH > {}'.format(hacc.ceh_thresh), 'CEH < {}'.format(hacc.ceh_thresh)],
+        opt = dict(legs=['Full', 'CEH  > {}'.format(hacc.ceh_thresh), 'CEH < {}'.format(hacc.ceh_thresh)],
                    legloc="top_right", title=title)
         p = plot_bokeh([x.project("resp") for x in hacc.hresp.values()],
                        density=True, xlabel="Layer Clusters' Response", **opt)
@@ -565,20 +593,47 @@ def explore_single_gun(args):
         ntrackster_2d_row.append(p)
 
         lay = [gen_row, trackster_row, fracs_row,
-               ntrackster_frac_row,
-               ntrackster_2d_split_row, ntrackster_2d_row]
-        if args.trackster_fractions:
-            lay.append(ntrackster_row)
-            lay.append(lcs_row)
+               ntrackster_2d_split_row, ntrackster_2d_row, ntrackster_row]
+        if args.intensive:
+            lay.extend([ntrackster_frac_row, lcs_row])
         lay = layout(lay)
         save(lay)
+
+def run_scan(infiles, args):
+    labels = ('clue3d',) #('clue3d', 'linking')
+    for inf in infiles:
+        print(inf)
+        
+    # matplotlib
+    # for avar in avars:
+    #     opt = dict(legs=[''] if nd==1 else distances, title=title)
+    #     plot_hist_mpl(hacc.hgen.project(avar),
+    #                   xlabel=xlabels[avar], out=savef("single_"+avar+"_both"), **opt)
     
+
+def analyse_single_gun(args):
+    """Data analysis."""
+    base = op.join("/data_CMS/cms/alves", args.dataset, "step3")
+    tree = "ana/hgc"
+
+    if args.dashboard:
+        infiles = (op.join(base, "step3_1.root"),)
+        build_dashboard(infiles, args)
+    else:
+        infiles, pars = [], ScanParameters()
+        for i in it.product(pars.cdens, pars.cdist, pars.kdens):
+            name = "step3_22_CDENS{}_CDIST{}_KDENS{}_V1.root".format(*i)
+            infiles.append(op.join(base, name))
+        run_scan(infiles, args)
+        
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Data exploration of single pion gun.')
-    parser.add_argument('--tag', default='',
+    parser = argparse.ArgumentParser(description='Data analysis of a scan of single pion gun samples.')
+    parser.add_argument('--tag', default='_default',
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
     parser.add_argument('--dataset', default='SinglePion_0PU_10En200_11Jul', help='Dataset to use.')
     parser.add_argument('--intensive', action="store_true", help='Run more time consuming trackster-related calculations.')
+    parser.add_argument('--dashboard', action="store_true", help='Run the full dashboard over one default sample.')
+    parser.add_argument('--outpath', default="/eos/home-b/bfontana/www/HadronReco", help='Output directory.')
     FLAGS = parser.parse_args()
     
-    explore_single_gun(FLAGS)
+    analyse_single_gun(FLAGS)
