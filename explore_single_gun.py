@@ -74,16 +74,18 @@ def histedges_equalN(x, nbins):
                      np.sort(x))        
         
 class AccumulateHistos():
-    def __init__(self, tree, infiles, tag, intensive=False):
+    def __init__(self, tree, infiles, tag, mode='light'):
+        assert mode in ('light', 'standard', 'intensive')
         self.nevents = 0
         self.nbins = 60
-        self.intensive = intensive
+        self.mode = mode
 
-        _types = ['hgen', 'htrackster', 'hntrackster', 'hntrackster_2d',
-                  'hfrac_trks_mult', 'hfrac_trks_sel', 'hfrac_em_had', 'hresp',
-                  'bad_lcs', 'good_lcs']
+        _types = ['hgen', 'htrackster', 'hntrackster', 'hntrackster_2d']
+        if self.mode != 'light':
+            _types += ['hfrac_trks_mult', 'hfrac_trks_sel', 'hfrac_em_had', 'hresp',
+                       'bad_lcs', 'good_lcs']
         _extratypes = ['hfrac_trks_ceh']
-        self.types = _types + _extratypes if self.intensive else _types
+        self.types = _types + _extratypes if self.mode == "intensive" else _types
         
         self.pickle_ext = ".pkl"
         self.adir = "histos_" + tag
@@ -91,8 +93,8 @@ class AccumulateHistos():
         self.last_cee_layer = 26
         self.ceh_thresh = 0.90
 
-        did_intensive_run = op.isdir(self.adir) and ( (len(os.listdir(self.adir)) == len(self.types) and self.intensive) or
-                                                      (len(os.listdir(self.adir)) == len(_types) and not self.intensive) )
+        did_intensive_run = op.isdir(self.adir) and ( (len(os.listdir(self.adir)) == len(self.types) and self.mode == "intensive") or
+                                                      (len(os.listdir(self.adir)) == len(_types) and not self.mode == "intensive") )
         if did_intensive_run:
             print('Loading histograms with tag {}...'.format(tag))
             self._load()
@@ -133,14 +135,15 @@ class AccumulateHistos():
                 s = np.full_like(en_top_n, True, dtype=bool)
             return ak.sum(en_top_n[s], axis=1) / ak.sum(data.multiclus_energy[s], axis=1)
 
-        if self.intensive:
+        if self.mode == "intensive":
             self.fill_frac_trks_ceh_energy(data)
             self.fill_lone_layer_clusters(data)
-        
-        for k in self.hfrac_trks_mult.keys():
-            self.hfrac_trks_mult[k].fill(frac = frac_trks_multiplicity(k, sel=False))
-        for k in self.hfrac_trks_sel.keys():
-            self.hfrac_trks_sel[k].fill(frac = frac_trks_multiplicity(k, sel=True))
+
+        if self.mode != "light":
+            for k in self.hfrac_trks_mult.keys():
+                self.hfrac_trks_mult[k].fill(frac = frac_trks_multiplicity(k, sel=False))
+            for k in self.hfrac_trks_sel.keys():
+                self.hfrac_trks_sel[k].fill(frac = frac_trks_multiplicity(k, sel=True))
 
         def frac_ceh(thresh):
             """Computes several ratios related to energy deposited in CEE and CEH."""
@@ -161,11 +164,12 @@ class AccumulateHistos():
             return (frac_ceh, frac_cee, num_ceh/den_gen, num_cee/den_gen, missing,
                     (den/den_gen)-1, (num_resp_ceh/den_resp_ceh)-1, (num_resp_cee/den_resp_cee)-1)
 
-        fceh = frac_ceh(thresh=self.ceh_thresh)
-        self.hfrac_em_had.fill(frac_ceh=fceh[0], frac_cee=fceh[1],
-                               frac_ceh_gen=fceh[2], frac_cee_gen=fceh[3], frac_miss_gen=fceh[4])
-        for ik,k in enumerate(self.hresp.keys()):
-            self.hresp[k].fill(resp=fceh[ik+5])
+        if self.mode != "light":
+            fceh = frac_ceh(thresh=self.ceh_thresh)
+            self.hfrac_em_had.fill(frac_ceh=fceh[0], frac_cee=fceh[1],
+                                   frac_ceh_gen=fceh[2], frac_cee_gen=fceh[3], frac_miss_gen=fceh[4])
+            for ik,k in enumerate(self.hresp.keys()):
+                self.hresp[k].fill(resp=fceh[ik+5])
             
     def _load(self):
         for t in self.types:
@@ -185,7 +189,7 @@ class AccumulateHistos():
                 lc_l = info(evid, trkid, 'layer')
                 lc_e = info(evid, trkid, 'energy')
 
-                if self.intensive:
+                if self.mode == "intensive":
                     en_ceh = ak.sum(lc_e[lc_l > self.last_cee_layer])
                     en_cee = ak.sum(lc_e[lc_l <= self.last_cee_layer])
                     f = en_ceh / (en_ceh + en_cee)
@@ -268,40 +272,41 @@ class AccumulateHistos():
             hist.axis.Regular(nn2, ranges['pt'][0],  ranges['pt'][1],  name="pt"),
         )
 
-        nb = 80
+        if self.mode != 'light':
 
-        if self.intensive:
-            self.hfrac_trks_ceh = {k:hist.Hist(
-                hist.axis.Regular(nb, -0.01, 1.01, name="frac"),
-                hist.axis.Regular(nb, -0.01, 1.01, name="frac_gen"),
-            ) for k in ('full_en', 'split_en', 'full_layer', 'split_layer')}
+            nb = 80
+            if self.mode == "intensive":
+                self.hfrac_trks_ceh = {k:hist.Hist(
+                    hist.axis.Regular(nb, -0.01, 1.01, name="frac"),
+                    hist.axis.Regular(nb, -0.01, 1.01, name="frac_gen"),
+                ) for k in ('full_en', 'split_en', 'full_layer', 'split_layer')}
 
-        frac_trks_keys = [1, 2, 5, 10]
-        self.hfrac_trks_mult = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02, name="frac")) for k in frac_trks_keys}
-        self.hfrac_trks_sel = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02, name="frac")) for k in frac_trks_keys}
-        
-        self.hfrac_em_had = hist.Hist(
-            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_ceh"),
-            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_cee"),
-            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_ceh_gen"),
-            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_cee_gen"),
-            hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_miss_gen"),
-        )
-        self.hresp = {k:hist.Hist(hist.axis.Regular(self.nbins, -1, 0.5, name="resp")) for k in ('full', 'cee', 'ceh')}
-
-        self.bad_lcs = hist.Hist(
-            hist.axis.Regular(self.nbins, ranges['lc_en'][0],  ranges['lc_en'][1],  name="en"),
-            hist.axis.Regular(self.nbins, ranges['lc_eta'][0], ranges['lc_eta'][1], name="eta"),
-            hist.axis.Regular(self.nbins, ranges['lc_phi'][0], ranges['lc_phi'][1], name="phi"),
-            hist.axis.Regular(self.nbins, ranges['lc_pt'][0],  ranges['lc_pt'][1],  name="pt"),
-        )
-        self.good_lcs = hist.Hist(
-            hist.axis.Regular(self.nbins, ranges['lc_en'][0],  ranges['lc_en'][1],  name="en"),
-            hist.axis.Regular(self.nbins, ranges['lc_eta'][0], ranges['lc_eta'][1], name="eta"),
-            hist.axis.Regular(self.nbins, ranges['lc_phi'][0], ranges['lc_phi'][1], name="phi"),
-            hist.axis.Regular(self.nbins, ranges['lc_pt'][0],  ranges['lc_pt'][1],  name="pt"),
-        )
-
+            frac_trks_keys = [1, 2, 5, 10]
+            self.hfrac_trks_mult = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02, name="frac")) for k in frac_trks_keys}
+            self.hfrac_trks_sel = {k:hist.Hist(hist.axis.Regular(nb, 0.2, 1.02, name="frac")) for k in frac_trks_keys}
+            
+            self.hfrac_em_had = hist.Hist(
+                hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_ceh"),
+                hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_cee"),
+                hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_ceh_gen"),
+                hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_cee_gen"),
+                hist.axis.Regular(self.nbins, -0.01,  1.01, name="frac_miss_gen"),
+            )
+            self.hresp = {k:hist.Hist(hist.axis.Regular(self.nbins, -1, 0.5, name="resp")) for k in ('full', 'cee', 'ceh')}
+     
+            self.bad_lcs = hist.Hist(
+                hist.axis.Regular(self.nbins, ranges['lc_en'][0],  ranges['lc_en'][1],  name="en"),
+                hist.axis.Regular(self.nbins, ranges['lc_eta'][0], ranges['lc_eta'][1], name="eta"),
+                hist.axis.Regular(self.nbins, ranges['lc_phi'][0], ranges['lc_phi'][1], name="phi"),
+                hist.axis.Regular(self.nbins, ranges['lc_pt'][0],  ranges['lc_pt'][1],  name="pt"),
+            )
+            self.good_lcs = hist.Hist(
+                hist.axis.Regular(self.nbins, ranges['lc_en'][0],  ranges['lc_en'][1],  name="en"),
+                hist.axis.Regular(self.nbins, ranges['lc_eta'][0], ranges['lc_eta'][1], name="eta"),
+                hist.axis.Regular(self.nbins, ranges['lc_phi'][0], ranges['lc_phi'][1], name="phi"),
+                hist.axis.Regular(self.nbins, ranges['lc_pt'][0],  ranges['lc_pt'][1],  name="pt"),
+            )
+     
         allvars = self._select_vars()
         for batch in tqdm(up.iterate(infiles + ":" + tree, 
                                      step_size=10000, library='ak',
@@ -342,8 +347,6 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
                tools="save,box_select,box_zoom,wheel_zoom,reset,undo,redo")
     for h,l in zip(hists, legs):
         if mode == '2d':
-            xbins  = np.array([x for x in h.axes[0].centers for _ in range(len(h.axes[1].centers))])
-            wbins  = np.array([x for x in (h.axes[0].edges[1:] - h.axes[0].edges[:-1]) for _ in range(len(h.axes[1].centers))])
             xtextbins = np.array([x-w/3 for x,w in zip(h.axes[0].centers,wbins) for _ in range(len(h.axes[1].centers))])
             ybins  = ak.concatenate([h.axes[1].centers for _ in range(len(h.axes[0].centers))]).to_numpy()
             hbins  = ak.concatenate([(h.axes[1].edges[1:] - h.axes[1].edges[:-1]) for _ in range(len(h.axes[1].centers))]).to_numpy()
@@ -434,7 +437,56 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
     # whisk.lower_head.size=8
     # p.add_layout(whisk)
     return p
-    
+
+def plot_mpl(hists, title, xlabel, ylabel, legs, mode='point', xerr=True, yerr=True):
+    """
+    Matplotlib plots. If mode=='2d', `x` and `y` are bin edges.
+    """
+    if not isinstance(hists, (tuple,list)):
+        hists = [hists]
+    if not isinstance(legs, (tuple,list)):
+        legs = [legs]
+    assert len(hists) == len(legs)
+
+    colors = it.cycle(palette)
+
+    wsize, hsize = 16, 16
+
+    fig = plt.figure(figsize=(wsize, hsize),)
+    ax = plt.subplot(111)
+    ax.title.set_size(100)
+
+    #ax.axhline(y=0., color='gray', linestyle='dashed')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    for h,l in zip(hists, legs):
+        #ax.plot(h.axes[0].centers, h.values(), "-o", color=next(colors), label=l)
+
+        x_lo, x_hi = [], []
+        y_lo, y_hi = [], []
+        if xerr:
+            for px, py, err in zip(h.axes[0].centers, h.values(), (h.axes[0].edges[1:] - h.axes[0].edges[:-1])/2):
+                x_lo.append(err)
+                x_hi.append(err)
+        if yerr:
+            for px, py, err in zip(h.axes[0].centers, h.values(), np.sqrt(h.variances())/2):
+                y_lo.append(err)
+                y_hi.append(err)
+
+        ax.errorbar(h.axes[0].centers, h.values(), xerr=[x_lo, x_hi], yerr=[y_lo, y_hi],
+                     fmt="-o", color=next(colors), label=l)
+
+                
+    hep.cms.text('Preliminary', fontsize=wsize*2.5)
+    hep.cms.lumitext(title, fontsize=wsize*2.5) # r"138 $fb^{-1}$ (13 TeV)"
+
+    for ext in ('.png', '.pdf'):
+        name = "test" + '_' + mode + ext
+        print('Stored in {}'.format(name))
+        plt.savefig(name, dpi=600)
+    plt.close()
+
 def plot_hist_mpl(hists, out, title, xlabel, legs, ylabel=None, ylog=False, density=False):
     """Matplotlib histograms."""
     if not isinstance(hist, (tuple,list)):
@@ -467,17 +519,16 @@ def plot_hist_mpl(hists, out, title, xlabel, legs, ylabel=None, ylog=False, dens
 
     plt.close()
 
-def build_dashboard(infiles, args):
-    labels = ('clue3d',) #('clue3d', 'linking')
-    for inf,_label in zip(infiles,labels):
+def build_dashboard(infiles, labels, tree, args):
+    avars = list(labels.keys())
+    xlabels = [k[0] for k,v in labels.items()]
+    xlabels_diff = [k[1] for k,v in labels.items()]
+    
+    for inf,_label in zip(infiles,('clue3d',)):
         label = "stats_single_gun_" + _label + '_' + args.tag
-        hacc = AccumulateHistos(tree, inf, label, args.intensive)
+        hacc = AccumulateHistos(tree, inf, label, args.mode)
         title = "Single π, {} events".format(hacc.nevents)
         opt = dict(title=title)
-
-        avars = ('en', 'eta', 'phi', 'pt')
-        xlabels      = {'en': "Energy [GeV]", 'eta': "|η|", 'phi': "ϕ", 'pt': 'pT [GeV]'}
-        xlabels_diff = {'en': "ΔE [GeV]", 'eta': "Δη", 'phi': "Δϕ", 'pt': 'ΔpT [GeV]'}
 
         # bokeh
         output_file(op.join(args.outpath, label)+'.html')
@@ -545,7 +596,7 @@ def build_dashboard(infiles, args):
                        frac=True, **opt)
         ntrackster_row.append(p)
 
-        if args.intensive:
+        if args.mode == "intensive":
             ntrackster_frac_row = []
             opt = dict(legs=['Trackster energy fraction', 'Trackster energy fraction w/ respect to Gen'],
                        legloc="bottom_left", title=title, ylog=True,)
@@ -594,44 +645,55 @@ def build_dashboard(infiles, args):
 
         lay = [gen_row, trackster_row, fracs_row,
                ntrackster_2d_split_row, ntrackster_2d_row, ntrackster_row]
-        if args.intensive:
+        if args.mode == "intensive":
             lay.extend([ntrackster_frac_row, lcs_row])
         lay = layout(lay)
         save(lay)
 
-def run_scan(infiles, args):
-    labels = ('clue3d',) #('clue3d', 'linking')
-    for inf in infiles:
-        print(inf)
-        
-    # matplotlib
-    # for avar in avars:
-    #     opt = dict(legs=[''] if nd==1 else distances, title=title)
-    #     plot_hist_mpl(hacc.hgen.project(avar),
-    #                   xlabel=xlabels[avar], out=savef("single_"+avar+"_both"), **opt)
+def run_scan(infiles, tags, labels, tree, args):
+    avars = list(labels.keys())
+
+    # hacc = {tag: AccumulateHistos(tree, inf, tag, args.intensive)
+    #         for inf,tag in zip(infiles,tags)}
+
+    hists = []
+    for avar in avars:
+        for inf, tag in zip(infiles, tags):
+            hacc = AccumulateHistos(tree, inf, tag, args.mode)
+            hists.append(hacc.hntrackster_2d.project(avar, "n").profile("n"))
+            break
     
+        plot_mpl(hists, title="Grid Scan", ylabel="# Tracksters", xlabel=labels[avar][0],
+                 mode='point', legs=[''])
+        break
 
 def analyse_single_gun(args):
     """Data analysis."""
     base = op.join("/data_CMS/cms/alves", args.dataset, "step3")
     tree = "ana/hgc"
 
+    labels = {'en': ("Energy [GeV]", "ΔE [GeV]"),
+              'eta': ("|η|", "Δη"),
+              'phi': ("ϕ", "Δϕ"),
+              'pt': ('pT [GeV]', 'ΔpT [GeV]')}
+
     if args.dashboard:
         infiles = (op.join(base, "step3_1.root"),)
-        build_dashboard(infiles, args)
+        build_dashboard(infiles, labels, tree, args)
     else:
-        infiles, pars = [], ScanParameters()
+        infiles, tags, pars = [], [], ScanParameters()
         for i in it.product(pars.cdens, pars.cdist, pars.kdens):
-            name = "step3_22_CDENS{}_CDIST{}_KDENS{}_V1.root".format(*i)
-            infiles.append(op.join(base, name))
-        run_scan(infiles, args)
+            tag = "22_CDENS{}_CDIST{}_KDENS{}_V1".format(*i)
+            tags.append(tag)
+            infiles.append(op.join(base, "step3_" + tag + ".root"))
+        run_scan(infiles, tags, labels, tree, args)
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Data analysis of a scan of single pion gun samples.')
     parser.add_argument('--tag', default='_default',
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
     parser.add_argument('--dataset', default='SinglePion_0PU_10En200_11Jul', help='Dataset to use.')
-    parser.add_argument('--intensive', action="store_true", help='Run more time consuming trackster-related calculations.')
+    parser.add_argument('--mode', default="light", choices=("light", "standard", "intensive"), help='Run more time consuming trackster-related calculations.')
     parser.add_argument('--dashboard', action="store_true", help='Run the full dashboard over one default sample.')
     parser.add_argument('--outpath', default="/eos/home-b/bfontana/www/HadronReco", help='Output directory.')
     FLAGS = parser.parse_args()

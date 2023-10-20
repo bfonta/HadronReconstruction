@@ -460,8 +460,7 @@ class DisplayEvent():
     
 def event_display(args):
     """Data exploration."""
-    #outpath = "/eos/user/b/bfontana/www/HadronReco"
-    outpath = "."
+    outpath = "/eos/home-b/bfontana/www/HadronReco"
 
     base = "/data_CMS/cms/alves"
     tree = "ana/hgc"
