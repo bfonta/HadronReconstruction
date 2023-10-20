@@ -48,9 +48,14 @@ class ScanParameters:
             self[key] = val
 
         # defaults are used if not provided by the user
-        for par in defaults.keys():
-            if par not in kwargs.keys():
-                self[par] = defaults[par][1]
+        for key, val in defaults.items():
+            if key in kwargs.keys() and val[0] in kwargs.keys():
+                raise RuntimeError('[ERROR] You passed the same parameter twice!')
+            
+            if val[0] in kwargs.keys():
+                self[key] = self[val[0]]
+            elif key not in kwargs.keys():
+                self[key] = defaults[key][1]
 
         if text_format:
             self._set_string_format(defaults)
@@ -460,63 +465,31 @@ def plot_mpl(hists, title, xlabel, ylabel, legs, mode='point', xerr=True, yerr=T
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
 
-    for h,l in zip(hists, legs):
-        #ax.plot(h.axes[0].centers, h.values(), "-o", color=next(colors), label=l)
+    for h, leg in zip(hists, legs):
 
         x_lo, x_hi = [], []
-        y_lo, y_hi = [], []
         if xerr:
             for px, py, err in zip(h.axes[0].centers, h.values(), (h.axes[0].edges[1:] - h.axes[0].edges[:-1])/2):
                 x_lo.append(err)
                 x_hi.append(err)
+        y_lo, y_hi = [], []
         if yerr:
             for px, py, err in zip(h.axes[0].centers, h.values(), np.sqrt(h.variances())/2):
                 y_lo.append(err)
                 y_hi.append(err)
 
         ax.errorbar(h.axes[0].centers, h.values(), xerr=[x_lo, x_hi], yerr=[y_lo, y_hi],
-                     fmt="-o", color=next(colors), label=l)
+                     fmt="-o", color=next(colors), label=leg)
 
+    plt.legend(loc="upper left")
                 
     hep.cms.text('Preliminary', fontsize=wsize*2.5)
     hep.cms.lumitext(title, fontsize=wsize*2.5) # r"138 $fb^{-1}$ (13 TeV)"
 
     for ext in ('.png', '.pdf'):
-        name = "test" + '_' + mode + ext
+        name = ylabel.replace(' ', '_').replace('#', 'N') + '_' + mode + ext
         print('Stored in {}'.format(name))
         plt.savefig(name, dpi=600)
-    plt.close()
-
-def plot_hist_mpl(hists, out, title, xlabel, legs, ylabel=None, ylog=False, density=False):
-    """Matplotlib histograms."""
-    if not isinstance(hist, (tuple,list)):
-        hists = [hists]
-
-    colors = itertools.cycle(palette)
-
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-    plt.xlabel(xlabel)
-    if ylabel is None:
-        plt.ylabel("a.u." if density else "Counts")
-    else:
-        plt.ylabel(ylabel)
-    if ylog:
-        hists = [[h if h>0. else 0.1] for hist in hists for h in hist]
-        ax.set_yscale('log')
-    
-    for i, (h,leg) in enumerate(zip(hists,legs)):
-        hep.histplot(h, ax=ax, color=next(colors), label=leg, density=density)
-
-    if len(legs) > 1:
-        plt.legend(loc="upper right")
-    #plt.tight_layout()
-
-    hep.cms.text('Simulation')
-    hep.cms.lumitext(title)
-    for ext in ('.png', '.pdf'):
-        plt.savefig(out + ext)
-
     plt.close()
 
 def build_dashboard(infiles, labels, tree, args):
@@ -650,21 +623,18 @@ def build_dashboard(infiles, labels, tree, args):
         lay = layout(lay)
         save(lay)
 
-def run_scan(infiles, tags, labels, tree, args):
+def run_scan(infiles, tags, legends, labels, tree, args):
     avars = list(labels.keys())
-
-    # hacc = {tag: AccumulateHistos(tree, inf, tag, args.intensive)
-    #         for inf,tag in zip(infiles,tags)}
 
     hists = []
     for avar in avars:
         for inf, tag in zip(infiles, tags):
             hacc = AccumulateHistos(tree, inf, tag, args.mode)
             hists.append(hacc.hntrackster_2d.project(avar, "n").profile("n"))
-            break
     
         plot_mpl(hists, title="Grid Scan", ylabel="# Tracksters", xlabel=labels[avar][0],
-                 mode='point', legs=[''])
+                 mode='point', legs=legends)
+
         break
 
 def analyse_single_gun(args):
@@ -681,12 +651,16 @@ def analyse_single_gun(args):
         infiles = (op.join(base, "step3_1.root"),)
         build_dashboard(infiles, labels, tree, args)
     else:
-        infiles, tags, pars = [], [], ScanParameters()
+        infiles, tags, legs = ([] for _ in range(3))
+        pars = ScanParameters(cdens=args.cdens, cdist=args.cdist, kdens=args.kdens)
+        fileid = "22"
         for i in it.product(pars.cdens, pars.cdist, pars.kdens):
-            tag = "22_CDENS{}_CDIST{}_KDENS{}_V1".format(*i)
-            tags.append(tag)
-            infiles.append(op.join(base, "step3_" + tag + ".root"))
-        run_scan(infiles, tags, labels, tree, args)
+            tag = "CDENS{}_CDIST{}_KDENS{}_V1".format(*i)
+            leg = r"$ρ_{{C}}={},\: Δ_{{C}}={},\: K_{{ρ}}={}$".format(*i).replace('p', '.').replace('m', '-')
+            tags.append(fileid + "_" + tag)
+            legs.append(leg)
+            infiles.append(op.join(base, "step3_" + fileid + "_" + tag + ".root"))
+        run_scan(infiles, tags, legs, labels, tree, args)
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Data analysis of a scan of single pion gun samples.')
@@ -696,6 +670,13 @@ if __name__ == "__main__":
     parser.add_argument('--mode', default="light", choices=("light", "standard", "intensive"), help='Run more time consuming trackster-related calculations.')
     parser.add_argument('--dashboard', action="store_true", help='Run the full dashboard over one default sample.')
     parser.add_argument('--outpath', default="/eos/home-b/bfontana/www/HadronReco", help='Output directory.')
+    parser.add_argument("--cdens", "--critical_density", nargs='+', default=[0.6],
+                        help="Critical density in GeV")
+    parser.add_argument("--cdist", "--critical_etaphi_distance", nargs='+', default=[0.025],
+                        help="Minimal distance in eta,phi space from nearestHigher to become a seed")
+    parser.add_argument("--kdens", "--kernel_density_factor", nargs='+', default=[0.2],
+                        help="Kernel factor to be applied to other LC while computing the local density")
+
     FLAGS = parser.parse_args()
     
     analyse_single_gun(FLAGS)
