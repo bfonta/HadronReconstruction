@@ -2,6 +2,7 @@
 
 _all_ = [ 'analyse_single_gun' ]
 
+import yaml
 from tqdm import tqdm
 import argparse
 import awkward as ak
@@ -25,6 +26,8 @@ import matplotlib; import matplotlib.pyplot as plt
 import mplhep as hep
 plt.style.use(hep.style.ROOT)
 
+from utils import nformat
+
 class ScanParameters:
     def __setitem__(self, key, value):
         """Support item assignment"""
@@ -35,12 +38,17 @@ class ScanParameters:
         return getattr(self, key)
 
     def __init__(self, text_format=True, **kwargs):
-        """Initialize parameters to be scanned."""
-        
-        defaults = {
-            'critical_density'         : ('cdens', [0.4, 0.5, 0.6, 0.8, 1.0, 1.3, 1.7, 2.0, 2.5]),
-            'critical_etaphi_distance' : ('cdist', [0.01, 0.02, 0.025, 0.03, 0.05]),
-            'kernel_density_factor'    : ('kdens', [0.2])
+        """
+        Initialize parameters to be scanned.
+        Defaults defined on a configuration file.
+        """
+        with open("config.yaml", 'r') as file:
+            cfg = yaml.safe_load(file)
+            
+        self.defaults = {
+            'critical_density'         : ('cdens', cfg["clue3d"]["criticalDensity"]),
+            'critical_etaphi_distance' : ('cdist', cfg["clue3d"]["criticalEtaphiDistance"]),
+            'kernel_density_factor'    : ('kdens', cfg["clue3d"]["kernelDensityFactor"])
         }
 
         # sets anything provided by the user
@@ -48,7 +56,7 @@ class ScanParameters:
             self[key] = val
 
         # defaults are used if not provided by the user
-        for key, val in defaults.items():
+        for key, val in self.defaults.items():
             if key in kwargs.keys() and val[0] in kwargs.keys():
                 raise RuntimeError('[ERROR] You passed the same parameter twice!')
             
@@ -58,26 +66,29 @@ class ScanParameters:
                 self[key] = defaults[key][1]
 
         if text_format:
-            self._set_string_format(defaults)
+            self._set_string_format(self.defaults)
 
         # define aliases for user convenience
-        for key, val in defaults.items():
+        for key, val in self.defaults.items():
             self[val[0]] = self[key]
         
     def _set_string_format(self, defaults):
         for key in defaults:
-            self[key] = [str(x).replace('.', 'p').replace('-', 'm') for x in self[key]]
-            
-def histedges_equalN(x, nbins):
-    """
-    Define bin boundaries with the same numbers of events.
-    `x` represents the array to be binned.
-    """
-    npt = len(x)
-    return np.interp(np.linspace(0, npt, nbins+1),
-                     np.arange(npt),
-                     np.sort(x))        
-        
+            self[key] = [nformat(str(x)) for x in self[key]]
+
+    def tag(self, version, **kwargs):
+        """Return formatted tag for file and dir naming."""
+        assert self.defaults.keys() == kwargs.keys()
+        atag = ""
+        for defkey in self.defaults.keys():
+            atag += defkey + str(self.defaults[defkey]) + "_"
+        return atag + version
+
+    def leg(self, **kwargs):
+        """Return formatted legend for plotting. GENERALIZATION MISSING."""
+        assert len(self.defaults.keys()) == len(kwargs)
+        return "$ρ_{{C}}={},\: Δ_{{C}}={},\: K_{{ρ}}={}$".format(kwargs)
+                    
 class AccumulateHistos():
     def __init__(self, tree, infiles, tag, mode='light'):
         assert mode in ('light', 'standard', 'intensive')
@@ -627,6 +638,7 @@ def run_scan(infiles, tags, legends, labels, tree, args):
     avars = list(labels.keys())
 
     hists = []
+    breakpoint()
     for avar in avars:
         for inf, tag in zip(infiles, tags):
             hacc = AccumulateHistos(tree, inf, tag, args.mode)
@@ -639,7 +651,7 @@ def run_scan(infiles, tags, legends, labels, tree, args):
 
 def analyse_single_gun(args):
     """Data analysis."""
-    base = op.join("/data_CMS/cms/alves", args.dataset, "step3")
+    base = op.join("/data_CMS/cms/", os.environ["USER"], args.dataset, "step3")
     tree = "ana/hgc"
 
     labels = {'en': ("Energy [GeV]", "ΔE [GeV]"),
@@ -655,11 +667,11 @@ def analyse_single_gun(args):
         pars = ScanParameters(cdens=args.cdens, cdist=args.cdist, kdens=args.kdens)
         fileid = "22"
         for i in it.product(pars.cdens, pars.cdist, pars.kdens):
-            tag = "CDENS{}_CDIST{}_KDENS{}_V1".format(*i)
-            leg = r"$ρ_{{C}}={},\: Δ_{{C}}={},\: K_{{ρ}}={}$".format(*i).replace('p', '.').replace('m', '-')
-            tags.append(fileid + "_" + tag)
-            legs.append(leg)
-            infiles.append(op.join(base, "step3_" + fileid + "_" + tag + ".root"))
+            tag = "FILEID" + fileid + "_" + pars.tag(version="V1",
+                                                     cdens=i[0], cdist=i[1], kdens=i[2])
+            tags.append(tag)
+            legs.append(pars.leg(*i))
+            infiles.append(op.join(base, "step3_" + tag + ".root"))
         run_scan(infiles, tags, legs, labels, tree, args)
         
 if __name__ == "__main__":
