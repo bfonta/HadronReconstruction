@@ -46,9 +46,9 @@ class ScanParameters:
             cfg = yaml.safe_load(file)
             
         self.defaults = {
-            'critical_density'         : ('cdens', cfg["clue3d"]["criticalDensity"]),
-            'critical_etaphi_distance' : ('cdist', cfg["clue3d"]["criticalEtaphiDistance"]),
-            'kernel_density_factor'    : ('kdens', cfg["clue3d"]["kernelDensityFactor"])
+            ('critical_density', 'cdens')         : cfg["clue3d"]["criticalDensity"],
+            ('critical_etaphi_distance', 'cdist') : cfg["clue3d"]["criticalEtaphiDistance"],
+            ('kernel_density_factor', 'kdens')    : cfg["clue3d"]["kernelDensityFactor"]
         }
 
         # sets anything provided by the user
@@ -57,37 +57,51 @@ class ScanParameters:
 
         # defaults are used if not provided by the user
         for key, val in self.defaults.items():
-            if key in kwargs.keys() and val[0] in kwargs.keys():
-                raise RuntimeError('[ERROR] You passed the same parameter twice!')
+            if all(x in kwargs.keys() for x in key):
+                raise RuntimeError('[ERROR] You passed the same parameter twice under different names!')
             
-            if val[0] in kwargs.keys():
-                self[key] = self[val[0]]
-            elif key not in kwargs.keys():
-                self[key] = defaults[key][1]
+            if key[1] in kwargs.keys():
+                self[key[0]] = self[key[1]]
+            elif key[0] not in kwargs.keys():
+                self[key[0]] = defaults[key]
 
         if text_format:
-            self._set_string_format(self.defaults)
+            self._set_string_format()
 
         # define aliases for user convenience
         for key, val in self.defaults.items():
-            self[val[0]] = self[key]
+            self[key[1]] = self[key[0]]
         
-    def _set_string_format(self, defaults):
-        for key in defaults:
-            self[key] = [nformat(str(x)) for x in self[key]]
+    def _set_string_format(self):
+        for key in self.defaults:
+            self[key[0]] = [nformat(str(x)) for x in self[key[0]]]
 
     def tag(self, version, **kwargs):
         """Return formatted tag for file and dir naming."""
-        assert self.defaults.keys() == kwargs.keys()
+        assert all(x in [k[1] for k in self.defaults.keys()] or
+                   x in [k[0] for k in self.defaults.keys()] for x in kwargs.keys())
         atag = ""
-        for defkey in self.defaults.keys():
-            atag += defkey + str(self.defaults[defkey]) + "_"
+        for key in self.defaults.keys():
+            if key[1] in kwargs:
+                atag += key[1].upper() + nformat(kwargs[key[1]]) + "_"
+            else:
+                atag += key[1].upper() + nformat(kwargs[key[0]]) + "_"
         return atag + version
 
     def leg(self, **kwargs):
-        """Return formatted legend for plotting. GENERALIZATION MISSING."""
+        """Return formatted legend for plotting."""
         assert len(self.defaults.keys()) == len(kwargs)
-        return "$ρ_{{C}}={},\: Δ_{{C}}={},\: K_{{ρ}}={}$".format(kwargs)
+        last = list(kwargs.keys())[-1]
+        labels = {'cdens': "ρ_{{C}}",
+                  'cdist': "Δ_{{C}}",
+                  'kdens': "K_{{ρ}}"}
+        assert list(labels.keys()) == [x[1] for x in self.defaults.keys()]
+        legend = "$"
+        for key, val in kwargs.items():
+            legend += labels[key] + "=" + nformat(val, inv=True)
+            if key != last:
+                legend += ",\:"
+        return legend + "$"
                     
 class AccumulateHistos():
     def __init__(self, tree, infiles, tag, mode='light'):
@@ -497,7 +511,7 @@ def plot_mpl(hists, title, xlabel, ylabel, legs, mode='point', xerr=True, yerr=T
     hep.cms.text('Preliminary', fontsize=wsize*2.5)
     hep.cms.lumitext(title, fontsize=wsize*2.5) # r"138 $fb^{-1}$ (13 TeV)"
 
-    for ext in ('.png', '.pdf'):
+    for ext in ('.png',):
         name = ylabel.replace(' ', '_').replace('#', 'N') + '_' + mode + ext
         print('Stored in {}'.format(name))
         plt.savefig(name, dpi=600)
@@ -638,7 +652,6 @@ def run_scan(infiles, tags, legends, labels, tree, args):
     avars = list(labels.keys())
 
     hists = []
-    breakpoint()
     for avar in avars:
         for inf, tag in zip(infiles, tags):
             hacc = AccumulateHistos(tree, inf, tag, args.mode)
@@ -667,10 +680,11 @@ def analyse_single_gun(args):
         pars = ScanParameters(cdens=args.cdens, cdist=args.cdist, kdens=args.kdens)
         fileid = "22"
         for i in it.product(pars.cdens, pars.cdist, pars.kdens):
-            tag = "FILEID" + fileid + "_" + pars.tag(version="V1",
-                                                     cdens=i[0], cdist=i[1], kdens=i[2])
+            indict = dict(cdens=i[0], cdist=i[1], kdens=i[2])
+            tag = fileid + "_" + pars.tag(version="V1", **indict)
+            leg = pars.leg(**indict)
             tags.append(tag)
-            legs.append(pars.leg(*i))
+            legs.append(leg)
             infiles.append(op.join(base, "step3_" + tag + ".root"))
         run_scan(infiles, tags, legs, labels, tree, args)
         
