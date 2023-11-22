@@ -468,15 +468,18 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
     # p.add_layout(whisk)
     return p
 
-def plot_mpl(hists, title, xlabel, ylabel, legs, savename, mode='point', xerr=True, yerr=True):
+def plot_mpl(hists, title, xlabel, ylabel, savename, mode='point', legs=None, xerr=True, yerr=True):
     """
     Matplotlib plots. If mode=='2d', `x` and `y` are bin edges.
     """
+    if mode == "2d":
+        assert legs is None
     if not isinstance(hists, (tuple,list)):
         hists = [hists]
     if not isinstance(legs, (tuple,list)):
         legs = [legs]
     assert len(hists) == len(legs)
+    assert mode in ('point', '2d')
 
     colors = it.cycle(palette)
 
@@ -492,19 +495,28 @@ def plot_mpl(hists, title, xlabel, ylabel, legs, savename, mode='point', xerr=Tr
 
     for h, leg in zip(hists, legs):
 
-        x_lo, x_hi = [], []
-        if xerr:
-            for px, py, err in zip(h.axes[0].centers, h.values(), (h.axes[0].edges[1:] - h.axes[0].edges[:-1])/2):
-                x_lo.append(err)
-                x_hi.append(err)
-        y_lo, y_hi = [], []
-        if yerr:
-            for px, py, err in zip(h.axes[0].centers, h.values(), np.sqrt(h.variances())/2):
-                y_lo.append(err)
-                y_hi.append(err)
+        # 1D graphs
+        if mode == 'point':
+            x_lo, x_hi = [], []
+            if xerr:
+                for px, py, err in zip(h.axes[0].centers, h.values(), (h.axes[0].edges[1:] - h.axes[0].edges[:-1])/2):
+                    x_lo.append(err)
+                    x_hi.append(err)
+            y_lo, y_hi = [], []
+            if yerr:
+                for px, py, err in zip(h.axes[0].centers, h.values(), np.sqrt(h.variances())/2):
+                    y_lo.append(err)
+                    y_hi.append(err)
+     
+            ax.errorbar(h.axes[0].centers, h.values(), xerr=[x_lo, x_hi], yerr=[y_lo, y_hi],
+                         fmt="-o", color=next(colors), label=leg)
 
-        ax.errorbar(h.axes[0].centers, h.values(), xerr=[x_lo, x_hi], yerr=[y_lo, y_hi],
-                     fmt="-o", color=next(colors), label=leg)
+        # 2D histograms
+        elif mode == '2d':
+            hep.hist2dplot(h.values(), h.axes[0].edges, h.axes[1].edges, flow=None)
+            # cbar.cbar.ax.set_ylabelxfull(labels.zlabel, rotation=0, labelpad=labels.labelpad, loc='top')
+            # cbar.cbar.ax.set_ylim([cmin,cmax])
+            # cbar.cbar.ax.tick_params(axis='y', labelrotation=0)
 
     plt.legend(loc="upper left")
                 
@@ -512,8 +524,8 @@ def plot_mpl(hists, title, xlabel, ylabel, legs, savename, mode='point', xerr=Tr
     hep.cms.lumitext(title, fontsize=wsize*2.5) # r"138 $fb^{-1}$ (13 TeV)"
 
     for ext in ('.png',):
-        plt.savefig(savename, dpi=600)
-        print('Stored in {}'.format(savename))
+        plt.savefig(savename + ext, dpi=600)
+        print('Stored in {}'.format(savename + ext))
     plt.close()
 
 def build_dashboard(infiles, labels, tree, args):
@@ -649,20 +661,28 @@ def build_dashboard(infiles, labels, tree, args):
 
 def run_scan(infiles, tags, legends, labels, tree, args):
     avars = list(labels.keys())
-    hists = {"ntracks": {}}
+    hists = {"ntracks": {}, "ntracks2D": {}}
     for avar in avars:
         hists["ntracks"][avar] = []
-        
+    hists["ntracks2D"]["etaVSen"] = []
+
+    nevents = 0
     for inf, tag in zip(infiles, tags):
         hacc = AccumulateHistos(tree, inf, tag, args.mode)
+        nevents += hacc.nevents
         for avar in avars:
             hists["ntracks"][avar].append(hacc.hntrackster_2d.project(avar, "n").profile("n"))
 
-    for avar in avars:
-        plot_mpl(hists["ntracks"][avar], title="Grid Scan",
-                 ylabel="# Tracksters", xlabel=labels[avar][0],
-                 savename="NTracks_" + avar,
-                 mode='point', legs=legends)
+    hists["ntracks2D"]["etaVSen"].append(hacc.hntrackster_2d.project("eta", "en", "n").profile("n"))
+
+    # for avar in avars:
+    #     plot_mpl(hists["ntracks"][avar], title=str(nevents) + " events",
+    #              ylabel="# Tracksters", xlabel=labels[avar][0],
+    #              savename="NTracks_" + avar,
+    #              mode='point', legs=legends)
+
+    plot_mpl(hists["ntracks2D"]["etaVSen"], title=str(nevents) + " events",
+             ylabel="Energy", xlabel="|η|", savename="NTracks_etaVSen", mode='2d')
 
 def analyse_single_gun(args):
     """Data analysis."""
@@ -680,20 +700,22 @@ def analyse_single_gun(args):
     else:
         infiles, tags, legs = ([] for _ in range(3))
         pars = ScanParameters(cdens=args.cdens, cdist=args.cdist, kdens=args.kdens)
-        fileid = "22"
+        fileids = ("22", "26", "27", "28", "29")
         for i in it.product(pars.cdens, pars.cdist, pars.kdens):
             indict = dict(cdens=i[0], cdist=i[1], kdens=i[2])
-            tag = fileid + "_" + pars.tag(version="V1", **indict)
             leg = pars.leg(**indict)
-            tags.append(tag)
             legs.append(leg)
-            infiles.append(op.join(base, "step3_" + tag + ".root"))
+            for fileid in fileids:
+                tag = fileid + "_" + pars.tag(version=args.version, **indict)
+                tags.append(tag)
+                infiles.append(op.join(base, "step3_" + tag + ".root"))
         run_scan(infiles, tags, legs, labels, tree, args)
         
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Data analysis of a scan of single pion gun samples.')
     parser.add_argument('--tag', default='_default',
                         help='Tag to store and load the histograms. Skips histogram production. Useful when only plot tweaks are necessary.')
+    parser.add_argument('--version', default="", help='Input files version.')
     parser.add_argument('--dataset', default='SinglePion_0PU_10En200_11Jul', help='Dataset to use.')
     parser.add_argument('--mode', default="light", choices=("light", "standard", "intensive"), help='Run more time consuming trackster-related calculations.')
     parser.add_argument('--dashboard', action="store_true", help='Run the full dashboard over one default sample.')
