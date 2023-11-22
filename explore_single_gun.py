@@ -468,7 +468,7 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
     # p.add_layout(whisk)
     return p
 
-def plot_mpl(hists, title, xlabel, ylabel, legs, mode='point', xerr=True, yerr=True):
+def plot_mpl(hists, title, xlabel, ylabel, legs, savename, mode='point', xerr=True, yerr=True):
     """
     Matplotlib plots. If mode=='2d', `x` and `y` are bin edges.
     """
@@ -512,9 +512,8 @@ def plot_mpl(hists, title, xlabel, ylabel, legs, mode='point', xerr=True, yerr=T
     hep.cms.lumitext(title, fontsize=wsize*2.5) # r"138 $fb^{-1}$ (13 TeV)"
 
     for ext in ('.png',):
-        name = ylabel.replace(' ', '_').replace('#', 'N') + '_' + mode + ext
-        print('Stored in {}'.format(name))
-        plt.savefig(name, dpi=600)
+        plt.savefig(savename, dpi=600)
+        print('Stored in {}'.format(savename))
     plt.close()
 
 def build_dashboard(infiles, labels, tree, args):
@@ -650,17 +649,20 @@ def build_dashboard(infiles, labels, tree, args):
 
 def run_scan(infiles, tags, legends, labels, tree, args):
     avars = list(labels.keys())
-
-    hists = []
+    hists = {"ntracks": {}}
     for avar in avars:
-        for inf, tag in zip(infiles, tags):
-            hacc = AccumulateHistos(tree, inf, tag, args.mode)
-            hists.append(hacc.hntrackster_2d.project(avar, "n").profile("n"))
-    
-        plot_mpl(hists, title="Grid Scan", ylabel="# Tracksters", xlabel=labels[avar][0],
-                 mode='point', legs=legends)
+        hists["ntracks"][avar] = []
+        
+    for inf, tag in zip(infiles, tags):
+        hacc = AccumulateHistos(tree, inf, tag, args.mode)
+        for avar in avars:
+            hists["ntracks"][avar].append(hacc.hntrackster_2d.project(avar, "n").profile("n"))
 
-        break
+    for avar in avars:
+        plot_mpl(hists["ntracks"][avar], title="Grid Scan",
+                 ylabel="# Tracksters", xlabel=labels[avar][0],
+                 savename="NTracks_" + avar,
+                 mode='point', legs=legends)
 
 def analyse_single_gun(args):
     """Data analysis."""
