@@ -184,9 +184,10 @@ class AccumulateHistos():
                        'bad_lcs', 'good_lcs']
         _extratypes = ['hfrac_trks_ceh']
         self.types = _types + _extratypes if self.mode == "intensive" else _types
-        
+
+        self.tag = tag
         self.pickle_ext = ".pkl"
-        self.adir = "histos_" + tag
+        self.adir = "histos_" + self.tag
 
         self.last_cee_layer = 26
         self.ceh_thresh = 0.90
@@ -194,12 +195,12 @@ class AccumulateHistos():
         did_intensive_run = op.isdir(self.adir) and ( (len(os.listdir(self.adir)) == len(self.types) and self.mode == "intensive") or
                                                       (len(os.listdir(self.adir)) == len(_types) and not self.mode == "intensive") )
         if did_intensive_run:
-            print('Loading histograms with tag {}...'.format(tag))
+            print('Loading histograms with tag {}...'.format(self.tag))
             self._load()
         else:
             if not op.isdir(self.adir):
                 os.makedirs(self.adir)
-            self._save(tree, infiles)
+            self._save(infiles)
 
     def _accumulate(self, data):
         self.hgen.fill(en  = ak.ravel(data.gunparticle_energy),
@@ -338,7 +339,7 @@ class AccumulateHistos():
                                    pt=good_lc_pt[lcid])
 
 
-    def _save(self, tree, infiles):
+    def _save(self, infiles):
         ranges = {'en': (5., 205.),    'eta': (1.55, 2.85),    'phi': (-3.25, 3.25),    'pt': (0, 75),
                   'lc_en': (0., 20.), 'lc_eta': (1.55, 2.85), 'lc_phi': (-3.25, 3.25), 'lc_pt': (0, 15)}
         
@@ -351,8 +352,8 @@ class AccumulateHistos():
         )
 
         self.htrackster = HistPlus(names=('en', 'eta', 'phi', 'pt'),
-                                   bins=((self.nbins, 0, 20), (self.nbins, 1.5, 3.1,),
-                                         (self.nbins, -3.2, 3.2), (self.nbins, 0, 18)))
+                                   bins=((50, 0, 20), (100, 1.5, 3.1,),
+                                         (20, -3.2, 3.2), (50, 0, 18)))
 
         nmax = 25
         nn = nmax+1
@@ -407,7 +408,7 @@ class AccumulateHistos():
                                 filter_name="/" + "|".join(allvars) + "/"):
             self.nevents += int(ak.count(batch.event))
             self._accumulate(batch)
-            
+        print("Processed {}.".format(self.tag))
         # store
         for t in self.types:
             with open(op.join(self.adir, t + self.pickle_ext), 'wb') as f:
@@ -558,6 +559,13 @@ def plot_mpl(hists, title, xlabel, ylabel, savename, mode='point', zlabel=None, 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
 
+    amin, amax = 1E20, 0
+    for h in hists:
+        amin = min(amin, min(h.values()))
+        amax = max(amax, max(h.values()))
+    diff = amax - amin
+    ax.set_ylim(amin - 0.05*diff, amax + 0.2*diff)
+    
     for h, leg in zip(hists, legs):
 
         # 1D graphs
@@ -583,8 +591,8 @@ def plot_mpl(hists, title, xlabel, ylabel, savename, mode='point', zlabel=None, 
             # cbar.cbar.ax.set_ylim([cmin,cmax])
             # cbar.cbar.ax.tick_params(axis='y', labelrotation=0)
 
-    plt.legend(loc="upper left")
-                
+    plt.legend(loc='best')
+
     hep.cms.text('Preliminary', fontsize=wsize*2.5)
     hep.cms.lumitext(title, fontsize=wsize*1.5) # r"138 $fb^{-1}$ (13 TeV)"
 
@@ -752,8 +760,8 @@ def run_scan(infiles, tags, legends, labels, tree, args):
         #          mode='point', legs=legends)
 
         if avar != "en":
-            plot_mpl(hists["cl_en"][avar], title=str(nevents) + " events",
-                     ylabel="Cluster energy [GeV]", xlabel=labels[avar][0],
+            plot_mpl(hists["cl_en"][avar], title="~ " + str(nevents) + " / " + str(len(tags)) + " events",
+                     ylabel="Trackster energy [GeV]", xlabel=labels[avar][0],
                      savename="ClusterEn_" + avar,
                      mode='point', legs=legends)
 
@@ -768,7 +776,7 @@ def analyse_single_gun(args):
     labels = {'en': ("Energy [GeV]", "ΔE [GeV]"),
               'eta': ("|η|", "Δη"),
               'phi': ("ϕ", "Δϕ"),
-              'pt': ('p_{{T}} [GeV]', 'Δp_{{T}} [GeV]')}
+              'pt': (r'$p_{{T}}\: [GeV]$', r'$Δp_{{T}}\: [GeV]$')}
 
     if args.dashboard:
         infiles = (op.join(base, "step3_1.root"),)
