@@ -3,7 +3,6 @@
 _all_ = [ 'analyse_single_gun' ]
 
 import yaml
-from tqdm import tqdm
 import argparse
 import awkward as ak
 import glob
@@ -27,6 +26,75 @@ import mplhep as hep
 plt.style.use(hep.style.ROOT)
 
 from utils import nformat
+
+class HistPlus:
+    """Class managing an object supporting multiple histograms for convenient profiling."""
+    def __init__(self, bins=None, names=None):
+        self.bins = ((60,0,20), (60,0,20), (60,0,20), (60,0,20)) if bins is None else bins
+        self._check_bins()
+        ndims = len(self.bins)
+        assert len(names) == ndims
+        self.axis_names = ("x", "y", "z", "w") if names is None else names
+        
+        self.binned = hist.Hist(*(hist.axis.Regular(self.bins[i][0], self.bins[i][1], self.bins[i][2], name=self.axis_names[i])
+                                  for i in range(ndims)),
+                                storage=hist.storage.Double())
+
+        self.sampled = {k:hist.Hist(*(hist.axis.Regular(self.bins[i][0], self.bins[i][1], self.bins[i][2], name=self.axis_names[i])
+                                      for i in range(ndims) if self.axis_names[i] != k),
+                                    storage=hist.storage.Mean())
+                        for k in self.axis_names}
+
+    def _check_bins(self):
+        """
+        Validate bins structure.
+        It should be a tuple or list where each element is: (nbins, min, max)
+        """
+        assert isinstance(self.bins, (tuple,list))
+        if len(self.bins) < 1 or len(self.bins) > 4:
+            mes = "[ERROR] The number of dimensions must lie between 1 and 4, but it was set to {}!".format(len(self.bins))
+            raise ValueError(mes)
+        for elem in self.bins:
+            assert len(elem) == 3
+    
+    def _ndims(self, **axis):
+        """Return number of dimensions of the full histogram."""
+        assert len(axis) > 0 and len(axis) <= 4
+        nam = self.axis_names
+        assert axis[nam[0]] is not None
+        if (axis[nam[1]] is None and any(k is not None for k in (axis[nam[2]], axis[nam[3]])) or
+            axis[nam[2]] is None and axis[nam[4]] is not None):
+            raise ValueError("[ERROR] An intermediate dimension was not specified!")
+        ndims = 1
+        if axis[nam[1]] is not None:
+            ndims += 1
+        if axis[nam[2]] is not None:
+            ndims += 1
+        if axis[nam[3]] is not None:
+            ndims += 1
+        return ndims
+
+    def binned_profile(self, varx, vary):
+        """Profiles the binned histogram, losing information compared to the 'project_*' methods."""
+        return self.binned.project(varx, vary).profile(vary)
+
+    def fill(self, **axis):
+        assert self._ndims(**axis) == len(self.bins)
+        locs = locals()['axis'] # has to be defined outside dict comprehension
+        ddd = {k:locs.get(k) for k in self.axis_names if k in locs.keys()}
+        self.binned.fill(**ddd)
+
+        for k in self.sampled:
+            self.sampled[k].fill(sample=locs.get(k),
+                                 **{q:locs.get(q) for q in self.axis_names if q in locs.keys() and q != k})
+
+    def project_1d(self, varx, vary):
+        """Projects 1D histograms with the mean accumulator."""
+        return self.sampled[vary].project(varx)
+
+    def project_2d(self, varx, vary, varz):
+        """Projects 2D histograms with the mean accumulator."""
+        return self.sampled[varz].project(varx, vary)
 
 class ScanParameters:
     def __setitem__(self, key, value):
@@ -139,11 +207,11 @@ class AccumulateHistos():
                        phi = ak.ravel(data.gunparticle_phi),
                        pt  = ak.ravel(data.gunparticle_pt))
 
-        self.htrackster.fill(en  = ak.ravel(data.multiclus_energy),
-                             eta = ak.ravel(data.multiclus_eta),
-                             phi = ak.ravel(data.multiclus_phi),
-                             pt  = ak.ravel(data.multiclus_energy))
-
+        self.htrackster.fill(en=ak.ravel(data.multiclus_energy),
+                             eta=ak.ravel(data.multiclus_eta),
+                             phi=ak.ravel(data.multiclus_phi),
+                             pt=ak.ravel(data.multiclus_energy))
+ 
         self.hntrackster.fill(n = ak.count(data.multiclus_energy, axis=1),)
 
         self.hntrackster_2d.fill(n   = ak.count(data.multiclus_energy, axis=1),
@@ -282,12 +350,9 @@ class AccumulateHistos():
             hist.axis.Regular(self.nbins, ranges['pt'][0],  ranges['pt'][1],  name="pt"),
         )
 
-        self.htrackster = hist.Hist(
-            hist.axis.Regular(self.nbins, 0,    20, name="en"),
-            hist.axis.Regular(self.nbins, 1.5,  3.1,  name="eta"),
-            hist.axis.Regular(self.nbins, -3.2, 3.2,  name="phi"),
-            hist.axis.Regular(self.nbins, 0,    18,  name="pt"),
-        )
+        self.htrackster = HistPlus(names=('en', 'eta', 'phi', 'pt'),
+                                   bins=((self.nbins, 0, 20), (self.nbins, 1.5, 3.1,),
+                                         (self.nbins, -3.2, 3.2), (self.nbins, 0, 18)))
 
         nmax = 25
         nn = nmax+1
@@ -338,9 +403,8 @@ class AccumulateHistos():
             )
      
         allvars = self._select_vars()
-        for batch in tqdm(up.iterate(infiles + ":" + tree, 
-                                     step_size=10000, library='ak',
-                                     filter_name="/" + "|".join(allvars) + "/"), total=len(glob.glob(infiles))):
+        for batch in up.iterate(infiles, step_size=10000, library='ak',
+                                filter_name="/" + "|".join(allvars) + "/"):
             self.nevents += int(ak.count(batch.event))
             self._accumulate(batch)
             
@@ -468,12 +532,13 @@ def plot_bokeh(hists, title, legs, xlabel, legloc="top_right",
     # p.add_layout(whisk)
     return p
 
-def plot_mpl(hists, title, xlabel, ylabel, savename, mode='point', legs=None, xerr=True, yerr=True):
+def plot_mpl(hists, title, xlabel, ylabel, savename, mode='point', zlabel=None, legs=None, xerr=True, yerr=True):
     """
     Matplotlib plots. If mode=='2d', `x` and `y` are bin edges.
     """
     if mode == "2d":
         assert legs is None
+        assert zlabel is not None
     if not isinstance(hists, (tuple,list)):
         hists = [hists]
     if not isinstance(legs, (tuple,list)):
@@ -513,15 +578,15 @@ def plot_mpl(hists, title, xlabel, ylabel, savename, mode='point', legs=None, xe
 
         # 2D histograms
         elif mode == '2d':
-            hep.hist2dplot(h.values(), h.axes[0].edges, h.axes[1].edges, flow=None)
-            # cbar.cbar.ax.set_ylabelxfull(labels.zlabel, rotation=0, labelpad=labels.labelpad, loc='top')
+            cbar = hep.hist2dplot(h.values(), h.axes[0].edges, h.axes[1].edges, flow=None)
+            cbar.cbar.ax.set_ylabel(zlabel, rotation=90, labelpad=0.5, loc='top')
             # cbar.cbar.ax.set_ylim([cmin,cmax])
             # cbar.cbar.ax.tick_params(axis='y', labelrotation=0)
 
     plt.legend(loc="upper left")
                 
     hep.cms.text('Preliminary', fontsize=wsize*2.5)
-    hep.cms.lumitext(title, fontsize=wsize*2.5) # r"138 $fb^{-1}$ (13 TeV)"
+    hep.cms.lumitext(title, fontsize=wsize*1.5) # r"138 $fb^{-1}$ (13 TeV)"
 
     for ext in ('.png',):
         plt.savefig(savename + ext, dpi=600)
@@ -661,9 +726,11 @@ def build_dashboard(infiles, labels, tree, args):
 
 def run_scan(infiles, tags, legends, labels, tree, args):
     avars = list(labels.keys())
-    hists = {"ntracks": {}, "ntracks2D": {}}
+    hists = {"ntracks": {}, "ntracks2D": {},
+             "cl_en": {},}
     for avar in avars:
         hists["ntracks"][avar] = []
+        hists["cl_en"][avar] = []
     hists["ntracks2D"]["etaVSen"] = []
 
     nevents = 0
@@ -672,17 +739,26 @@ def run_scan(infiles, tags, legends, labels, tree, args):
         nevents += hacc.nevents
         for avar in avars:
             hists["ntracks"][avar].append(hacc.hntrackster_2d.project(avar, "n").profile("n"))
+            if avar != "en":
+                hists["cl_en"][avar].append(hacc.htrackster.project_1d(avar, "en"))
 
     hists["ntracks2D"]["etaVSen"].append(hacc.hntrackster_2d.project("eta", "en", "n").profile("n"))
 
-    # for avar in avars:
-    #     plot_mpl(hists["ntracks"][avar], title=str(nevents) + " events",
-    #              ylabel="# Tracksters", xlabel=labels[avar][0],
-    #              savename="NTracks_" + avar,
-    #              mode='point', legs=legends)
+    # plotting
+    for avar in avars:
+        # plot_mpl(hists["ntracks"][avar], title=str(nevents) + " events",
+        #          ylabel="# Tracksters", xlabel=labels[avar][0],
+        #          savename="NTracks_" + avar,
+        #          mode='point', legs=legends)
 
-    plot_mpl(hists["ntracks2D"]["etaVSen"], title=str(nevents) + " events",
-             ylabel="Energy", xlabel="|η|", savename="NTracks_etaVSen", mode='2d')
+        if avar != "en":
+            plot_mpl(hists["cl_en"][avar], title=str(nevents) + " events",
+                     ylabel="Cluster energy [GeV]", xlabel=labels[avar][0],
+                     savename="ClusterEn_" + avar,
+                     mode='point', legs=legends)
+
+    # plot_mpl(hists["ntracks2D"]["etaVSen"], title=str(nevents) + " events",
+    #          ylabel="Energy", xlabel="|η|", zlabel="#Tracksters", savename="NTracks_etaVSen", mode='2d')
 
 def analyse_single_gun(args):
     """Data analysis."""
@@ -692,7 +768,7 @@ def analyse_single_gun(args):
     labels = {'en': ("Energy [GeV]", "ΔE [GeV]"),
               'eta': ("|η|", "Δη"),
               'phi': ("ϕ", "Δϕ"),
-              'pt': ('pT [GeV]', 'ΔpT [GeV]')}
+              'pt': ('p_{{T}} [GeV]', 'Δp_{{T}} [GeV]')}
 
     if args.dashboard:
         infiles = (op.join(base, "step3_1.root"),)
@@ -703,12 +779,12 @@ def analyse_single_gun(args):
         fileids = ("22", "26", "27", "28", "29")
         for i in it.product(pars.cdens, pars.cdist, pars.kdens):
             indict = dict(cdens=i[0], cdist=i[1], kdens=i[2])
+            tag = pars.tag(version=args.version, **indict)
             leg = pars.leg(**indict)
             legs.append(leg)
-            for fileid in fileids:
-                tag = fileid + "_" + pars.tag(version=args.version, **indict)
-                tags.append(tag)
-                infiles.append(op.join(base, "step3_" + tag + ".root"))
+            tags.append(tag)
+            fiter = iter([op.join(base, "step3_" + x + "_" + tag + ".root") + ":" + tree for x in fileids])
+            infiles.append(fiter)
         run_scan(infiles, tags, legs, labels, tree, args)
         
 if __name__ == "__main__":
